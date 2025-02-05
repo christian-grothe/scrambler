@@ -4,6 +4,7 @@ pub const SEQUENCES: i32 = 3;
 pub const STEP_NUM: u8 = 8;
 pub const INIT_BPM: f32 = 60.0;
 pub const AUDIO_BUFFER_SIZE_SEC: f32 = 0.25;
+pub const VOICE_NUM: u8 = 32;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
@@ -120,9 +121,7 @@ impl Sequencer {
 
         let mut output = 0.0;
         for step in self.steps.iter_mut() {
-            if step.is_playing {
-                output += step.render();
-            }
+            output += step.render();
         }
 
         *sample = output;
@@ -155,52 +154,30 @@ enum EnvState {
     Release,
 }
 
-struct Step {
-    buffer: Vec<f32>,
-    record_head: usize,
+struct Voice {
     play_head: usize,
-    _sample_rate: f32,
-    is_recording: bool,
     is_playing: bool,
     gain: f32,
     gain_inc_attack: f32,
     gain_inc_release: f32,
     env_state: EnvState,
+    buffer_size: usize,
 }
 
-impl Step {
-    fn new(sample_rate: f32) -> Self {
-        let buffer_size = sample_rate * AUDIO_BUFFER_SIZE_SEC;
-        Step {
-            buffer: vec![0.0; buffer_size as usize],
-            record_head: 0,
+impl Voice {
+    fn new(sample_rate: f32, buffer_size: usize) -> Self {
+        Voice {
             play_head: 0,
-            _sample_rate: sample_rate,
-            is_recording: false,
             is_playing: false,
             gain: 0.0,
             gain_inc_attack: 50.0 / sample_rate,
             gain_inc_release: 10.0 / sample_rate,
             env_state: EnvState::Attack,
+            buffer_size,
         }
     }
 
-    fn record(&mut self, sample: f32) {
-        self.buffer[self.record_head] = sample;
-        self.record_head += 1;
-        if self.record_head >= self.buffer.len() {
-            self.is_recording = false;
-            self.record_head = 0;
-        }
-    }
-
-    fn play(&mut self) {
-        if !self.is_playing {
-            self.is_playing = true
-        }
-    }
-
-    fn render(&mut self) -> f32 {
+    fn render(&mut self) -> (usize, f32) {
         match self.env_state {
             EnvState::Attack => self.gain += self.gain_inc_attack,
             EnvState::Release => self.gain -= self.gain_inc_release,
@@ -214,13 +191,68 @@ impl Step {
             self.gain = 0.0;
         }
 
-        let mut sample = self.buffer[self.play_head];
-        sample *= self.gain;
         self.play_head += 1;
-        if self.play_head >= self.buffer.len() {
+        if self.play_head >= self.buffer_size {
             self.is_playing = false;
             self.play_head = 0;
             self.env_state = EnvState::Attack;
+        }
+
+        (self.play_head, self.gain)
+    }
+}
+
+struct Step {
+    buffer: Vec<f32>,
+    record_head: usize,
+    _sample_rate: f32,
+    is_recording: bool,
+    voices: Vec<Voice>,
+}
+
+impl Step {
+    fn new(sample_rate: f32) -> Self {
+        let buffer_size = sample_rate * AUDIO_BUFFER_SIZE_SEC;
+        Step {
+            buffer: vec![0.0; buffer_size as usize],
+            record_head: 0,
+            _sample_rate: sample_rate,
+            is_recording: false,
+            voices: {
+                let mut voices: Vec<Voice> = Vec::with_capacity(VOICE_NUM as usize);
+                for _ in 0..VOICE_NUM {
+                    voices.push(Voice::new(sample_rate, buffer_size as usize));
+                }
+                voices
+            },
+        }
+    }
+
+    fn record(&mut self, sample: f32) {
+        self.buffer[self.record_head] = sample;
+        self.record_head += 1;
+        if self.record_head >= self.buffer.len() {
+            self.is_recording = false;
+            self.record_head = 0;
+        }
+    }
+
+    fn play(&mut self) {
+        for voice in self.voices.iter_mut() {
+            if !voice.is_playing {
+                voice.is_playing = true;
+                break;
+            }
+        }
+    }
+
+    fn render(&mut self) -> f32 {
+        let mut sample = 0.0;
+        for voice in self.voices.iter_mut() {
+            if voice.is_playing {
+                let (pos, gain) = voice.render();
+                sample += self.buffer[pos] * gain;
+            }
         }
         sample
     }
