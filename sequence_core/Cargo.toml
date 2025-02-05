@@ -1,0 +1,7 @@
+[package]
+name = "sequence_core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+triple_buffer = "8.0.0"
