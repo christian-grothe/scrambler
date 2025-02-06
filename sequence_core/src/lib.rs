@@ -3,7 +3,7 @@ pub use triple_buffer::{triple_buffer, Input, Output};
 pub const SEQUENCES: i32 = 3;
 pub const STEP_NUM: u8 = 8;
 pub const INIT_BPM: f32 = 60.0;
-pub const AUDIO_BUFFER_SIZE_SEC: f32 = 0.25;
+pub const AUDIO_BUFFER_SIZE_SEC: f32 = 5.0;
 pub const VOICE_NUM: u8 = 32;
 
 #[derive(Debug, Clone, Copy)]
@@ -25,17 +25,17 @@ pub enum Subdivision {
 impl Subdivision {
     fn factor(self) -> f32 {
         match self {
-            Subdivision::Quarter => 1.0, // Quarter = one quarter (same as Whole in this interpretation)
-            Subdivision::Half => 2.0,    // Half = two quarters
-            Subdivision::Eighth => 0.5,  // Eighth = half of a quarter
-            Subdivision::Sixteenth => 0.25, // Sixteenth = 1/4 of a quarter
-            Subdivision::ThirtySecond => 0.125, // 1/8 of a quarter
-            Subdivision::TripletQuarter => 2.0 / 3.0, // Two-thirds of a quarter note
-            Subdivision::TripletEighth => 1.0 / 3.0, // One-third of a quarter note
-            Subdivision::TripletSixteenth => 1.0 / 6.0, // One-sixth of a quarter note
-            Subdivision::DottedQuarter => 1.5, // Quarter + Half Quarter
-            Subdivision::DottedEighth => 0.75, // Eighth + Half Eighth
-            Subdivision::DottedSixteenth => 0.375, // Sixteenth + Half Sixteenth
+            Subdivision::Quarter => 1.0,
+            Subdivision::Half => 2.0,
+            Subdivision::Eighth => 0.5,
+            Subdivision::Sixteenth => 0.25,
+            Subdivision::ThirtySecond => 0.125,
+            Subdivision::TripletQuarter => 2.0 / 3.0,
+            Subdivision::TripletEighth => 1.0 / 3.0,
+            Subdivision::TripletSixteenth => 1.0 / 6.0,
+            Subdivision::DottedQuarter => 1.5,
+            Subdivision::DottedEighth => 0.75,
+            Subdivision::DottedSixteenth => 0.375,
         }
     }
 
@@ -48,6 +48,7 @@ impl Subdivision {
 pub struct DrawData {
     pub positions: Vec<u8>,
     pub bpm: f32,
+    pub transporter: (u8, u8, u8),
 }
 
 impl DrawData {
@@ -55,6 +56,7 @@ impl DrawData {
         DrawData {
             positions: vec![0; SEQUENCES as usize],
             bpm: INIT_BPM,
+            transporter: (0, 0, 0),
         }
     }
 }
@@ -64,6 +66,7 @@ pub struct Sequencer {
     sequences: Vec<Sequence>,
     draw_data: Input<DrawData>,
     steps: Vec<Step>,
+    transporter: Transporter,
 }
 
 impl Sequencer {
@@ -93,15 +96,19 @@ impl Sequencer {
                     }
                     steps
                 },
+                transporter: Transporter::new(sample_rate),
             },
             buf_output,
         )
     }
 
     pub fn render(&mut self, sample: &mut f32) {
+        self.transporter.update();
+
         let draw_data = self.draw_data.input_buffer();
         let positions = &mut draw_data.positions;
         let bpm = &mut draw_data.bpm;
+        let transporter = &mut draw_data.transporter;
 
         for step in self.steps.iter_mut() {
             if step.is_recording {
@@ -115,7 +122,11 @@ impl Sequencer {
             }
             positions[i] = sequence.current_step;
         }
-
+        *transporter = (
+            self.transporter.quater,
+            self.transporter.eights,
+            self.transporter.sixteenth,
+        );
         *bpm = self.bpm;
         self.draw_data.publish();
 
@@ -148,6 +159,43 @@ impl Sequencer {
     }
 }
 
+struct Transporter {
+    quater: u8,
+    eights: u8,
+    sixteenth: u8,
+    counter: Counter,
+}
+
+impl Transporter {
+    fn new(sample_rate: f32) -> Self {
+        let freq = Subdivision::Sixteenth.to_hz(INIT_BPM);
+
+        Transporter {
+            quater: 0,
+            eights: 0,
+            sixteenth: 0,
+            counter: Counter::new(sample_rate, freq / sample_rate),
+        }
+    }
+
+    fn update(&mut self) {
+        if self.counter.update() {
+            self.sixteenth += 1;
+            if self.sixteenth > 16 {
+                self.sixteenth = 0;
+                self.eights += 1;
+            }
+            if self.eights > 8 {
+                self.eights = 0;
+                self.quater += 1;
+            }
+            if self.quater > 4 {
+                self.quater = 0;
+            }
+        }
+    }
+}
+
 #[derive(PartialEq)]
 enum EnvState {
     Attack,
@@ -162,6 +210,7 @@ struct Voice {
     gain_inc_release: f32,
     env_state: EnvState,
     buffer_size: usize,
+    pitch: f32,
 }
 
 impl Voice {
@@ -171,9 +220,10 @@ impl Voice {
             is_playing: false,
             gain: 0.0,
             gain_inc_attack: 50.0 / sample_rate,
-            gain_inc_release: 10.0 / sample_rate,
+            gain_inc_release: 0.5 / sample_rate,
             env_state: EnvState::Attack,
             buffer_size,
+            pitch: 2.0,
         }
     }
 

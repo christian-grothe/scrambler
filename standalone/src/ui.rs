@@ -60,8 +60,15 @@ impl Ui {
             .constraints(constraints)
             .split(layout_horizontal[1]);
 
-        let text = Text::from(format!("BPM: {}", draw_data.bpm));
-        frame.render_widget(text, sequences[0]);
+        let spans = Text::from(Line::from(vec![
+            Span::from(format!("BPM: {}", draw_data.bpm)),
+            Span::from(format!(
+                "  {}:{}:{}",
+                draw_data.transporter.0, draw_data.transporter.1, draw_data.transporter.2
+            )),
+        ]));
+
+        frame.render_widget(spans, sequences[0]);
 
         for (i, position) in positions.iter().enumerate() {
             let mut spans =
