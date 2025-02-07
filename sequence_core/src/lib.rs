@@ -2,11 +2,11 @@ pub use triple_buffer::{triple_buffer, Input, Output};
 
 pub const SEQUENCES: i32 = 3;
 pub const STEP_NUM: u8 = 8;
-pub const INIT_BPM: f32 = 60.0;
+pub const INIT_BPM: f32 = 100.0;
 pub const AUDIO_BUFFER_SIZE_SEC: f32 = 5.0;
 pub const VOICE_NUM: u8 = 32;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(dead_code)]
 pub enum Subdivision {
     Half,             // Half note (1/2)
@@ -42,11 +42,28 @@ impl Subdivision {
     fn to_hz(self, bpm: f32) -> f32 {
         (bpm / 60.0) / self.factor()
     }
+
+    pub fn get_symbol(&self) -> &str {
+        match self {
+            Subdivision::Quarter => "1/4",
+            Subdivision::Half => "2/4",
+            Subdivision::Eighth => "1/8",
+            Subdivision::Sixteenth => "1/16",
+            Subdivision::ThirtySecond => "1/32",
+            Subdivision::TripletQuarter => "1/4t",
+            Subdivision::TripletEighth => "1/8t",
+            Subdivision::TripletSixteenth => "1/16t",
+            Subdivision::DottedQuarter => "1/4.",
+            Subdivision::DottedEighth => "1/8.",
+            Subdivision::DottedSixteenth => "1/16.",
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct DrawData {
     pub positions: Vec<u8>,
+    pub subdivisions: Vec<Subdivision>,
     pub bpm: f32,
     pub transporter: (u8, u8, u8),
 }
@@ -57,6 +74,7 @@ impl DrawData {
             positions: vec![0; SEQUENCES as usize],
             bpm: INIT_BPM,
             transporter: (0, 0, 0),
+            subdivisions: vec![Subdivision::Quarter; SEQUENCES as usize],
         }
     }
 }
@@ -79,9 +97,9 @@ impl Sequencer {
                 draw_data: buf_input,
                 sequences: {
                     let mut sequences: Vec<Sequence> = Vec::with_capacity(SEQUENCES as usize);
-                    sequences.push(Sequence::new(sample_rate, bpm, Subdivision::Quarter));
-                    sequences.push(Sequence::new(sample_rate, bpm, Subdivision::TripletEighth));
-                    sequences.push(Sequence::new(sample_rate, bpm, Subdivision::TripletQuarter));
+                    sequences.push(Sequence::new(sample_rate, bpm, Subdivision::Quarter, 1.0));
+                    sequences.push(Sequence::new(sample_rate, bpm, Subdivision::Eighth, 1.5));
+                    sequences.push(Sequence::new(sample_rate, bpm, Subdivision::Sixteenth, 2.0));
                     // sequences.push(Sequence::new(
                     //     sample_rate,
                     //     bpm,
@@ -103,10 +121,11 @@ impl Sequencer {
     }
 
     pub fn render(&mut self, sample: &mut f32) {
-        self.transporter.update();
+        let update = self.transporter.update();
 
         let draw_data = self.draw_data.input_buffer();
         let positions = &mut draw_data.positions;
+        let subdivisions = &mut draw_data.subdivisions;
         let bpm = &mut draw_data.bpm;
         let transporter = &mut draw_data.transporter;
 
@@ -117,14 +136,20 @@ impl Sequencer {
         }
 
         for (i, sequence) in self.sequences.iter_mut().enumerate() {
-            if let Some(step) = sequence.update() {
-                self.steps[step as usize].play();
+            if let Some((step, pitch)) = sequence.update(update, self.bpm) {
+                self.steps[step as usize].play(pitch);
             }
             positions[i] = sequence.current_step;
+            if let Some(subdivision) = sequence.next_subdivision {
+                subdivisions[i] = subdivision;
+            } else {
+                subdivisions[i] = sequence.subdivision;
+            }
         }
+
         *transporter = (
+            self.transporter.bar,
             self.transporter.quater,
-            self.transporter.eights,
             self.transporter.sixteenth,
         );
         *bpm = self.bpm;
@@ -145,25 +170,33 @@ impl Sequencer {
         }
     }
 
+    pub fn toggle(&mut self, idx: usize) {
+        if let Some(sequence) = self.sequences.get_mut(idx) {
+            sequence.toggle();
+        }
+    }
+
     pub fn set_bpm(&mut self, bpm: f32) {
         self.bpm = bpm;
+        self.transporter.set_bpm(bpm);
         for sequence in self.sequences.iter_mut() {
             sequence.set_bpm(bpm);
         }
     }
 
     pub fn set_subdivision(&mut self, index: usize, subdivision: Subdivision) {
-        if let Some(instance) = self.sequences.get_mut(index) {
-            instance.set_subdivision(self.bpm, subdivision);
+        if let Some(sequence) = self.sequences.get_mut(index) {
+            sequence.set_subdivision(subdivision);
         }
     }
 }
 
 struct Transporter {
+    bar: u8,
     quater: u8,
-    eights: u8,
     sixteenth: u8,
     counter: Counter,
+    quantisation: Subdivision,
 }
 
 impl Transporter {
@@ -172,27 +205,41 @@ impl Transporter {
 
         Transporter {
             quater: 0,
-            eights: 0,
+            bar: 0,
             sixteenth: 0,
-            counter: Counter::new(sample_rate, freq / sample_rate),
+            counter: Counter::new(sample_rate, freq),
+            quantisation: Subdivision::Quarter,
         }
     }
 
-    fn update(&mut self) {
+    fn update(&mut self) -> bool {
+        let mut ret: bool = false;
         if self.counter.update() {
             self.sixteenth += 1;
-            if self.sixteenth > 16 {
+            if self.quantisation == Subdivision::Sixteenth {
+                ret = true;
+            }
+            if self.sixteenth >= 4 {
                 self.sixteenth = 0;
-                self.eights += 1;
-            }
-            if self.eights > 8 {
-                self.eights = 0;
                 self.quater += 1;
+                if self.quantisation == Subdivision::Quarter {
+                    ret = true;
+                }
             }
-            if self.quater > 4 {
+            if self.quater >= 4 {
                 self.quater = 0;
+                self.bar += 1;
+            }
+            if self.bar >= 4 {
+                self.bar = 0;
             }
         }
+        ret
+    }
+
+    fn set_bpm(&mut self, bpm: f32) {
+        self.counter
+            .set_frequency(Subdivision::Sixteenth.to_hz(bpm))
     }
 }
 
@@ -203,7 +250,7 @@ enum EnvState {
 }
 
 struct Voice {
-    play_head: usize,
+    play_head: f32,
     is_playing: bool,
     gain: f32,
     gain_inc_attack: f32,
@@ -216,18 +263,18 @@ struct Voice {
 impl Voice {
     fn new(sample_rate: f32, buffer_size: usize) -> Self {
         Voice {
-            play_head: 0,
+            play_head: 0.0,
             is_playing: false,
             gain: 0.0,
             gain_inc_attack: 50.0 / sample_rate,
-            gain_inc_release: 0.5 / sample_rate,
+            gain_inc_release: 5.0 / sample_rate,
             env_state: EnvState::Attack,
             buffer_size,
-            pitch: 2.0,
+            pitch: 4.0,
         }
     }
 
-    fn render(&mut self) -> (usize, f32) {
+    fn render(&mut self) -> (f32, f32) {
         match self.env_state {
             EnvState::Attack => self.gain += self.gain_inc_attack,
             EnvState::Release => self.gain -= self.gain_inc_release,
@@ -241,10 +288,10 @@ impl Voice {
             self.gain = 0.0;
         }
 
-        self.play_head += 1;
-        if self.play_head >= self.buffer_size {
+        self.play_head += self.pitch;
+        if self.play_head >= self.buffer_size as f32 {
             self.is_playing = false;
-            self.play_head = 0;
+            self.play_head = 0.0;
             self.env_state = EnvState::Attack;
         }
 
@@ -287,9 +334,10 @@ impl Step {
         }
     }
 
-    fn play(&mut self) {
+    fn play(&mut self, pitch: f32) {
         for voice in self.voices.iter_mut() {
             if !voice.is_playing {
+                voice.pitch = pitch;
                 voice.is_playing = true;
                 break;
             }
@@ -301,34 +349,77 @@ impl Step {
         for voice in self.voices.iter_mut() {
             if voice.is_playing {
                 let (pos, gain) = voice.render();
-                sample += self.buffer[pos] * gain;
+                let pos_int = pos as usize;
+                let next_pos = (pos_int + 1) % self.buffer.len();
+                let frac = pos - pos_int as f32;
+
+                let next_sample =
+                    self.buffer[pos_int] * (1.0 - frac) + self.buffer[next_pos] * frac;
+                sample += next_sample * gain;
             }
         }
         sample
     }
 }
+
+#[derive(PartialEq)]
+enum PlayState {
+    Playing,
+    Stopped,
+    Resume,
+}
+
 struct Sequence {
     subdivision: Subdivision,
+    next_subdivision: Option<Subdivision>,
     counter: Counter,
     current_step: u8,
+    pitch: f32,
+    play_state: PlayState,
 }
 
 impl Sequence {
-    fn new(sample_rate: f32, bpm: f32, subdivision: Subdivision) -> Self {
+    fn new(sample_rate: f32, bpm: f32, subdivision: Subdivision, pitch: f32) -> Self {
         Sequence {
             subdivision,
+            next_subdivision: None,
             counter: Counter::new(sample_rate, subdivision.to_hz(bpm)),
             current_step: 0,
+            pitch,
+            play_state: PlayState::Stopped,
         }
     }
 
-    fn update(&mut self) -> Option<u8> {
+    fn toggle(&mut self) {
+        match self.play_state {
+            PlayState::Playing => {
+                self.play_state = PlayState::Stopped;
+                self.counter.reset();
+                self.current_step = 0;
+            }
+            PlayState::Stopped => self.play_state = PlayState::Resume,
+            PlayState::Resume => self.play_state = PlayState::Stopped,
+        }
+    }
+
+    fn update(&mut self, apply_change: bool, current_bpm: f32) -> Option<(u8, f32)> {
+        if apply_change {
+            if self.play_state == PlayState::Resume {
+                self.play_state = PlayState::Playing;
+            }
+            self.apply_subdivision(current_bpm);
+        }
+
+        if self.play_state != PlayState::Playing {
+            return None;
+        }
+
         if self.counter.update() {
             self.current_step = self.current_step + 1;
             if self.current_step >= STEP_NUM {
                 self.current_step = 0;
             }
-            Some(self.current_step)
+            Some((self.current_step, self.pitch))
         } else {
             None
         }
@@ -338,9 +429,16 @@ impl Sequence {
         self.counter.set_frequency(self.subdivision.to_hz(bpm));
     }
 
-    fn set_subdivision(&mut self, current_bpm: f32, subdivision: Subdivision) {
-        self.subdivision = subdivision;
-        self.set_bpm(current_bpm);
+    fn apply_subdivision(&mut self, current_bpm: f32) {
+        if let Some(subdivision) = self.next_subdivision {
+            self.subdivision = subdivision;
+            self.set_bpm(current_bpm);
+            self.next_subdivision = None;
+        }
+    }
+
+    fn set_subdivision(&mut self, subdivision: Subdivision) {
+        self.next_subdivision = Some(subdivision);
     }
 }
 
@@ -357,6 +455,10 @@ impl Counter {
             increment: frequency / sample_rate,
             sample_rate,
         }
+    }
+
+    fn reset(&mut self) {
+        self.phase = 0.0;
     }
 
     fn update(&mut self) -> bool {

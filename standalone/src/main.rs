@@ -9,17 +9,19 @@ use ratatui::crossterm::{
     event::{KeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
     execute,
 };
+use sequence_core::Subdivision;
 
 mod ui;
 
 enum SetEvent {
     SetBmp(f32),
     Record(usize),
+    SetSubdivision((usize, Subdivision)),
+    Toggle(usize),
 }
 
 fn main() -> io::Result<()> {
     let (s, r) = unbounded();
-    s.send(SetEvent::SetBmp(120.0)).unwrap();
 
     let (client, _status) = Client::new("sequencer", ClientOptions::default()).unwrap();
 
@@ -64,6 +66,10 @@ fn main() -> io::Result<()> {
                 match event {
                     SetEvent::SetBmp(val) => state.sequencer.set_bpm(val),
                     SetEvent::Record(idx) => state.sequencer.record(idx),
+                    SetEvent::SetSubdivision((index, val)) => {
+                        state.sequencer.set_subdivision(index, val)
+                    }
+                    SetEvent::Toggle(index) => state.sequencer.toggle(index),
                 }
             }
 
