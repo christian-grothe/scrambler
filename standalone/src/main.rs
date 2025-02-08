@@ -18,6 +18,7 @@ enum SetEvent {
     Record(usize),
     SetSubdivision((usize, Subdivision)),
     Toggle(usize),
+    SetPitch((usize, f32)),
 }
 
 fn main() -> io::Result<()> {
@@ -70,6 +71,7 @@ fn main() -> io::Result<()> {
                         state.sequencer.set_subdivision(index, val)
                     }
                     SetEvent::Toggle(index) => state.sequencer.toggle(index),
+                    SetEvent::SetPitch((index, pitch)) => state.sequencer.set_pitch(index, pitch),
                 }
             }
 
@@ -92,7 +94,7 @@ fn main() -> io::Result<()> {
         PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     )?;
 
-    let tick_rate = Duration::from_millis(60);
+    let tick_rate = Duration::from_millis(30);
     let mut last_tick = Instant::now();
 
     let mut ui_handler = ui::Ui::new(draw_data, s);

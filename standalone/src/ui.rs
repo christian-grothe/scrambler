@@ -6,11 +6,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 use sequence_core::{DrawData, Output, Subdivision, STEP_NUM};
-use symbols::{STEP_ACTIVE, STEP_INACTIVE};
+use symbols::{BLANK, FULL, RANGE_END, RANGE_START, STEP_ACTIVE, STEP_INACTIVE};
 
 use crate::SetEvent;
 
@@ -38,7 +38,7 @@ impl Ui {
             .direction(Direction::Vertical)
             .constraints(vec![
                 Constraint::Min(0),
-                Constraint::Length(4),
+                Constraint::Min(0),
                 Constraint::Min(0),
             ])
             .split(frame.area());
@@ -47,47 +47,81 @@ impl Ui {
             .direction(Direction::Horizontal)
             .constraints(vec![
                 Constraint::Min(0),
-                Constraint::Min(0),
+                Constraint::Length(50),
                 Constraint::Min(0),
             ])
             .split(layout_vertical[1]);
 
         let positions = &draw_data.positions;
-        let constraints = vec![Constraint::Length(1); positions.len() + 1];
+
+        let main_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![
+                Constraint::Length(2), // status_bar
+                Constraint::Min(0),    // steps
+                Constraint::Min(0),    // params
+            ])
+            .split(layout_horizontal[1]);
 
         let sequences = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(constraints)
-            .split(layout_horizontal[1]);
+            .constraints(vec![Constraint::Length(3); positions.len()])
+            .split(main_area[1]);
 
-        let spans = Text::from(Line::from(vec![
+        let status_bar = Paragraph::new(Text::from(Line::from(vec![
             Span::from(format!("BPM: {}", draw_data.bpm)),
             Span::from(format!(
                 "  {}:{}:{}",
                 draw_data.transporter.0, draw_data.transporter.1, draw_data.transporter.2
             )),
-        ]));
+        ])))
+        .block(Block::new().borders(Borders::BOTTOM));
 
-        frame.render_widget(spans, sequences[0]);
+        frame.render_widget(status_bar, main_area[0]);
 
         for (i, position) in positions.iter().enumerate() {
-            let mut spans =
+            let sequence_area = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(vec![Constraint::Length(1); 2])
+                .split(sequences[i]);
+
+            // render steps
+            let mut steps =
                 vec![Span::styled(STEP_INACTIVE, Style::default().bold()); STEP_NUM as usize];
-            spans[*position as usize] = Span::styled(STEP_ACTIVE, Style::default().bold());
+
+            steps[*position as usize] = Span::styled(STEP_ACTIVE, Style::default().bold());
+
             if self.state.selected_sequence == i {
-                spans.push(
+                steps.push(
                     Span::from(format!("  {}", draw_data.subdivisions[i].get_symbol()))
                         .style(Style::default().fg(Color::Red)),
                 );
             } else {
-                spans.push(Span::from(format!(
+                steps.push(Span::from(format!(
                     "  {}",
                     draw_data.subdivisions[i].get_symbol()
                 )));
             }
-            let seq_spans = Text::from(Line::from(spans));
-            let seq_paragraph = Paragraph::new(seq_spans);
-            frame.render_widget(seq_paragraph, sequences[i + 1]);
+
+            frame.render_widget(
+                Paragraph::new(Text::from(Line::from(steps))),
+                sequence_area[0],
+            );
+
+            // render range
+            let mut range = vec![Span::styled(BLANK, Style::default().bold()); STEP_NUM as usize];
+            for y in draw_data.ranges[i].0..draw_data.ranges[i].1 {
+                range[y as usize] = Span::styled(FULL, Style::default().bold());
+            }
+            range[draw_data.ranges[i].0 as usize] =
+                Span::styled(RANGE_START, Style::default().bold());
+            range[draw_data.ranges[i].1 as usize] =
+                Span::styled(RANGE_END, Style::default().bold());
+
+            frame.render_widget(
+                Paragraph::new(Text::from(Line::from(range))),
+                sequence_area[1],
+            );
         }
     }
 }
@@ -114,6 +148,20 @@ impl State {
                         KeyCode::Char('j') => self
                             .sender
                             .send(SetEvent::SetBmp(draw_data.bpm - 1.0))
+                            .unwrap(),
+                        KeyCode::Char('l') => self
+                            .sender
+                            .send(SetEvent::SetPitch((
+                                self.selected_sequence,
+                                draw_data.pitches[self.selected_sequence] + 0.1,
+                            )))
+                            .unwrap(),
+                        KeyCode::Char('h') => self
+                            .sender
+                            .send(SetEvent::SetPitch((
+                                self.selected_sequence,
+                                draw_data.pitches[self.selected_sequence] - 0.1,
+                            )))
                             .unwrap(),
                         KeyCode::Char('1') => self.sender.send(SetEvent::Record(0)).unwrap(),
                         KeyCode::Char('2') => self.sender.send(SetEvent::Record(1)).unwrap(),
@@ -195,6 +243,10 @@ impl State {
                                 self.selected_sequence,
                                 Subdivision::DottedSixteenth,
                             )))
+                            .unwrap(),
+                        KeyCode::Enter => self
+                            .sender
+                            .send(SetEvent::Toggle(self.selected_sequence))
                             .unwrap(),
                         _ => {}
                     };

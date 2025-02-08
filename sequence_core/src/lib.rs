@@ -64,6 +64,8 @@ impl Subdivision {
 pub struct DrawData {
     pub positions: Vec<u8>,
     pub subdivisions: Vec<Subdivision>,
+    pub pitches: Vec<f32>,
+    pub ranges: Vec<(u8, u8)>,
     pub bpm: f32,
     pub transporter: (u8, u8, u8),
 }
@@ -75,6 +77,8 @@ impl DrawData {
             bpm: INIT_BPM,
             transporter: (0, 0, 0),
             subdivisions: vec![Subdivision::Quarter; SEQUENCES as usize],
+            pitches: vec![1.0; SEQUENCES as usize],
+            ranges: vec![(0, 0); SEQUENCES as usize],
         }
     }
 }
@@ -97,9 +101,30 @@ impl Sequencer {
                 draw_data: buf_input,
                 sequences: {
                     let mut sequences: Vec<Sequence> = Vec::with_capacity(SEQUENCES as usize);
-                    sequences.push(Sequence::new(sample_rate, bpm, Subdivision::Quarter, 1.0));
-                    sequences.push(Sequence::new(sample_rate, bpm, Subdivision::Eighth, 1.5));
-                    sequences.push(Sequence::new(sample_rate, bpm, Subdivision::Sixteenth, 2.0));
+                    sequences.push(Sequence::new(
+                        sample_rate,
+                        bpm,
+                        Subdivision::Quarter,
+                        1.0,
+                        (0, 4),
+                        PlayMode::Forwards,
+                    ));
+                    sequences.push(Sequence::new(
+                        sample_rate,
+                        bpm,
+                        Subdivision::Eighth,
+                        1.5,
+                        (3, 6),
+                        PlayMode::Backwards,
+                    ));
+                    sequences.push(Sequence::new(
+                        sample_rate,
+                        bpm,
+                        Subdivision::Sixteenth,
+                        2.0,
+                        (4, 7),
+                        PlayMode::BackAndForth(0),
+                    ));
                     // sequences.push(Sequence::new(
                     //     sample_rate,
                     //     bpm,
@@ -121,13 +146,13 @@ impl Sequencer {
     }
 
     pub fn render(&mut self, sample: &mut f32) {
-        let update = self.transporter.update();
-
         let draw_data = self.draw_data.input_buffer();
         let positions = &mut draw_data.positions;
         let subdivisions = &mut draw_data.subdivisions;
         let bpm = &mut draw_data.bpm;
         let transporter = &mut draw_data.transporter;
+        let pitches = &mut draw_data.pitches;
+        let ranges = &mut draw_data.ranges;
 
         for step in self.steps.iter_mut() {
             if step.is_recording {
@@ -135,11 +160,14 @@ impl Sequencer {
             }
         }
 
+        let apply = self.transporter.update();
         for (i, sequence) in self.sequences.iter_mut().enumerate() {
-            if let Some((step, pitch)) = sequence.update(update, self.bpm) {
+            if let Some((step, pitch)) = sequence.update(apply, self.bpm) {
                 self.steps[step as usize].play(pitch);
             }
             positions[i] = sequence.current_step;
+            pitches[i] = sequence.pitch;
+            ranges[i] = sequence.play_range;
             if let Some(subdivision) = sequence.next_subdivision {
                 subdivisions[i] = subdivision;
             } else {
@@ -167,6 +195,12 @@ impl Sequencer {
         if let Some(step) = self.steps.get_mut(step_idx) {
             step.is_recording = true;
             step.record_head = 0;
+        }
+    }
+
+    pub fn set_pitch(&mut self, idx: usize, pitch: f32) {
+        if let Some(sequence) = self.sequences.get_mut(idx) {
+            sequence.pitch = pitch;
         }
     }
 
@@ -369,6 +403,12 @@ enum PlayState {
     Resume,
 }
 
+enum PlayMode {
+    Forwards,
+    Backwards,
+    BackAndForth(u8),
+}
+
 struct Sequence {
     subdivision: Subdivision,
     next_subdivision: Option<Subdivision>,
@@ -376,17 +416,28 @@ struct Sequence {
     current_step: u8,
     pitch: f32,
     play_state: PlayState,
+    play_mode: PlayMode,
+    play_range: (u8, u8),
 }
 
 impl Sequence {
-    fn new(sample_rate: f32, bpm: f32, subdivision: Subdivision, pitch: f32) -> Self {
+    fn new(
+        sample_rate: f32,
+        bpm: f32,
+        subdivision: Subdivision,
+        pitch: f32,
+        play_range: (u8, u8),
+        play_mode: PlayMode,
+    ) -> Self {
         Sequence {
             subdivision,
             next_subdivision: None,
             counter: Counter::new(sample_rate, subdivision.to_hz(bpm)),
-            current_step: 0,
+            current_step: play_range.0,
             pitch,
             play_state: PlayState::Stopped,
+            play_mode,
+            play_range,
         }
     }
 
@@ -395,7 +446,6 @@ impl Sequence {
             PlayState::Playing => {
                 self.play_state = PlayState::Stopped;
                 self.counter.reset();
-                self.current_step = 0;
             }
             PlayState::Stopped => self.play_state = PlayState::Resume,
             PlayState::Resume => self.play_state = PlayState::Stopped,
@@ -407,21 +457,41 @@ impl Sequence {
             if self.play_state == PlayState::Resume {
                 self.play_state = PlayState::Playing;
             }
+
             self.apply_subdivision(current_bpm);
         }
 
-        if self.play_state != PlayState::Playing {
-            return None;
-        }
-
-        if self.counter.update() {
-            self.current_step = self.current_step + 1;
-            if self.current_step >= STEP_NUM {
-                self.current_step = 0;
+        if self.play_state != PlayState::Playing || !self.counter.update() {
+            None
+        } else {
+            match self.play_mode {
+                PlayMode::Forwards => {
+                    self.current_step += 1;
+                    if self.current_step > self.play_range.1 {
+                        self.current_step = self.play_range.0;
+                    }
+                }
+                PlayMode::Backwards => {
+                    self.current_step -= 1;
+                    if self.current_step < self.play_range.0 {
+                        self.current_step = self.play_range.1;
+                    }
+                }
+                PlayMode::BackAndForth(id) => {
+                    if id == 0 {
+                        self.current_step += 1;
+                        if self.current_step >= self.play_range.1 {
+                            self.play_mode = PlayMode::BackAndForth(1);
+                        }
+                    } else {
+                        self.current_step -= 1;
+                        if self.current_step <= self.play_range.0 {
+                            self.play_mode = PlayMode::BackAndForth(0);
+                        }
+                    }
+                }
             }
             Some((self.current_step, self.pitch))
-        } else {
-            None
         }
     }
 
@@ -433,6 +503,7 @@ impl Sequence {
         if let Some(subdivision) = self.next_subdivision {
             self.subdivision = subdivision;
             self.set_bpm(current_bpm);
+            self.counter.reset();
             self.next_subdivision = None;
         }
     }
@@ -462,7 +533,7 @@ impl Counter {
     }
 
     fn update(&mut self) -> bool {
-        self.phase = self.phase + self.increment;
+        self.phase += self.increment;
         if self.phase >= 1.0 {
             self.phase = 0.0;
             return true;
