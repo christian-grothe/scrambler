@@ -9,7 +9,7 @@ use ratatui::crossterm::{
     event::{KeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
     execute,
 };
-use sequence_core::Subdivision;
+use sequence_core::{PlayMode, Subdivision};
 
 mod ui;
 
@@ -18,7 +18,12 @@ enum SetEvent {
     Record(usize),
     SetSubdivision((usize, Subdivision)),
     Toggle(usize),
-    SetPitch((usize, f32)),
+    SetPitch((usize, i8)),
+    SetRangeStart((usize, u8)),
+    SetRangeEnd((usize, u8)),
+    SetDir((usize, PlayMode)),
+    SetAttack(f32),
+    SetRelease(f32),
 }
 
 fn main() -> io::Result<()> {
@@ -72,6 +77,17 @@ fn main() -> io::Result<()> {
                     }
                     SetEvent::Toggle(index) => state.sequencer.toggle(index),
                     SetEvent::SetPitch((index, pitch)) => state.sequencer.set_pitch(index, pitch),
+                    SetEvent::SetRangeStart((index, pitch)) => {
+                        state.sequencer.set_range_start(index, pitch)
+                    }
+                    SetEvent::SetRangeEnd((index, pitch)) => {
+                        state.sequencer.set_range_end(index, pitch)
+                    }
+                    SetEvent::SetDir((index, playmode)) => {
+                        state.sequencer.set_play_mode(index, playmode)
+                    }
+                    SetEvent::SetAttack(val) => state.sequencer.set_attack(val),
+                    SetEvent::SetRelease(val) => state.sequencer.set_release(val),
                 }
             }
 

@@ -9,8 +9,10 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-use sequence_core::{DrawData, Output, Subdivision, STEP_NUM};
-use symbols::{BLANK, FULL, RANGE_END, RANGE_START, STEP_ACTIVE, STEP_INACTIVE};
+use sequence_core::{DrawData, Output, STEP_NUM};
+use symbols::{
+    BLANK, FULL, RANGE_END, RANGE_SINGLE, RANGE_START, SELECTED, STEP_ACTIVE, STEP_INACTIVE,
+};
 
 use crate::SetEvent;
 
@@ -27,7 +29,13 @@ impl Ui {
                 exiting: false,
                 draw_data,
                 sender,
-                selected_sequence: 0,
+                mode: Mode::Record,
+                selected: Selected::Div,
+                selected_area: SelectedArea::Sequence(0),
+                selected_global: SelectedGlobal::Bpm,
+                semitones: vec![0; 3],
+                attack: 0.01,
+                release: 1.0,
             },
         }
     }
@@ -57,32 +65,69 @@ impl Ui {
         let main_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![
-                Constraint::Length(2), // status_bar
+                Constraint::Length(1), // transporter
+                Constraint::Length(2), // status
                 Constraint::Min(0),    // steps
-                Constraint::Min(0),    // params
             ])
             .split(layout_horizontal[1]);
 
         let sequences = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(vec![Constraint::Length(3); positions.len()])
-            .split(main_area[1]);
+            .constraints(vec![Constraint::Length(5); positions.len()])
+            .split(main_area[2]);
 
-        let status_bar = Paragraph::new(Text::from(Line::from(vec![
-            Span::from(format!("BPM: {}", draw_data.bpm)),
-            Span::from(format!(
-                "  {}:{}:{}",
-                draw_data.transporter.0, draw_data.transporter.1, draw_data.transporter.2
-            )),
-        ])))
-        .block(Block::new().borders(Borders::BOTTOM));
+        let mode = match self.state.mode {
+            Mode::Record => "rec",
+            Mode::RangeStart => "range start",
+            Mode::RangeEnd => "range end",
+        };
 
-        frame.render_widget(status_bar, main_area[0]);
+        let mut status_spans = vec![
+            Span::from(format!(" BPM: {} ", draw_data.bpm)),
+            Span::from(format!("   att: {:.2} ", self.state.attack)),
+            Span::from(format!("   rel: {:.2} ", self.state.release)),
+            Span::from(format!(" |  Mode: {} ", mode)),
+        ];
+
+        if self.state.selected_area == SelectedArea::Global {
+            match self.state.selected_global {
+                SelectedGlobal::Bpm => {
+                    status_spans[0] = status_spans[0]
+                        .clone()
+                        .style(Style::default().fg(Color::Red))
+                }
+                SelectedGlobal::Att => {
+                    status_spans[1] = status_spans[1]
+                        .clone()
+                        .style(Style::default().fg(Color::Red))
+                }
+                SelectedGlobal::Rel => {
+                    status_spans[2] = status_spans[2]
+                        .clone()
+                        .style(Style::default().fg(Color::Red))
+                }
+            }
+        }
+
+        let status_bar = Paragraph::new(Text::from(Line::from(status_spans)))
+            .block(Block::new().borders(Borders::BOTTOM));
+
+        frame.render_widget(status_bar, main_area[1]);
+
+        let transporter_span = vec![Span::from(format!(
+            " {}:{} ",
+            draw_data.transporter.1 + 1,
+            draw_data.transporter.2 + 1
+        ))];
+        frame.render_widget(
+            Paragraph::new(Text::from(Line::from(transporter_span))),
+            main_area[0],
+        );
 
         for (i, position) in positions.iter().enumerate() {
             let sequence_area = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints(vec![Constraint::Length(1); 2])
+                .constraints(vec![Constraint::Length(1); 3])
                 .split(sequences[i]);
 
             // render steps
@@ -91,16 +136,8 @@ impl Ui {
 
             steps[*position as usize] = Span::styled(STEP_ACTIVE, Style::default().bold());
 
-            if self.state.selected_sequence == i {
-                steps.push(
-                    Span::from(format!("  {}", draw_data.subdivisions[i].get_symbol()))
-                        .style(Style::default().fg(Color::Red)),
-                );
-            } else {
-                steps.push(Span::from(format!(
-                    "  {}",
-                    draw_data.subdivisions[i].get_symbol()
-                )));
+            if self.state.selected_area == SelectedArea::Sequence(i) {
+                steps.push(Span::from(SELECTED).style(Style::default().fg(Color::Red)));
             }
 
             frame.render_widget(
@@ -113,24 +150,157 @@ impl Ui {
             for y in draw_data.ranges[i].0..draw_data.ranges[i].1 {
                 range[y as usize] = Span::styled(FULL, Style::default().bold());
             }
-            range[draw_data.ranges[i].0 as usize] =
-                Span::styled(RANGE_START, Style::default().bold());
-            range[draw_data.ranges[i].1 as usize] =
-                Span::styled(RANGE_END, Style::default().bold());
+            if draw_data.ranges[i].0 == draw_data.ranges[i].1 {
+                range[draw_data.ranges[i].0 as usize] =
+                    Span::styled(RANGE_SINGLE, Style::default().bold());
+            } else {
+                range[draw_data.ranges[i].0 as usize] =
+                    Span::styled(RANGE_START, Style::default().bold());
+                range[draw_data.ranges[i].1 as usize] =
+                    Span::styled(RANGE_END, Style::default().bold());
+            }
 
             frame.render_widget(
                 Paragraph::new(Text::from(Line::from(range))),
                 sequence_area[1],
             );
+
+            // render params
+            let mut param_lines = vec![
+                Span::from(format!(" Div: {} ", draw_data.subdivisions[i].get_symbol())),
+                Span::from(format!(" Dir: {} ", draw_data.dirs[i].get_symbol())),
+                Span::from(format!(" Pitch: {} ", self.state.semitones[i])),
+                //Span::from(format!(" Gain: {} ", "GAIN")),
+            ];
+
+            if self.state.selected_area == SelectedArea::Sequence(i) {
+                match self.state.selected {
+                    Selected::Div => {
+                        param_lines[0] = param_lines[0]
+                            .clone()
+                            .style(Style::default().fg(Color::Red))
+                    }
+                    Selected::Dir => {
+                        param_lines[1] = param_lines[1]
+                            .clone()
+                            .style(Style::default().fg(Color::Red))
+                    }
+                    Selected::Pitch => {
+                        param_lines[2] = param_lines[2]
+                            .clone()
+                            .style(Style::default().fg(Color::Red))
+                    }
+                };
+            };
+
+            let params = Paragraph::new(Text::from(Line::from(param_lines)));
+
+            frame.render_widget(params, sequence_area[2]);
         }
+    }
+}
+
+enum Mode {
+    Record,
+    RangeStart,
+    RangeEnd,
+}
+
+#[derive(PartialEq)]
+enum Selected {
+    Div,
+    Dir,
+    Pitch,
+}
+
+#[derive(PartialEq)]
+enum SelectedGlobal {
+    Bpm,
+    Att,
+    Rel,
+}
+
+impl SelectedGlobal {
+    fn next(&mut self) {
+        *self = match self {
+            SelectedGlobal::Bpm => SelectedGlobal::Att,
+            SelectedGlobal::Att => SelectedGlobal::Rel,
+            SelectedGlobal::Rel => SelectedGlobal::Att,
+        }
+    }
+
+    fn prev(&mut self) {
+        *self = match self {
+            SelectedGlobal::Bpm => SelectedGlobal::Rel,
+            SelectedGlobal::Att => SelectedGlobal::Bpm,
+            SelectedGlobal::Rel => SelectedGlobal::Att,
+        }
+    }
+}
+
+#[derive(PartialEq)]
+enum SelectedArea {
+    Sequence(usize),
+    Global,
+}
+
+impl SelectedArea {
+    fn next(&mut self) {
+        *self = match self {
+            SelectedArea::Sequence(idx) => {
+                if *idx >= 2 {
+                    SelectedArea::Global
+                } else {
+                    SelectedArea::Sequence(*idx + 1)
+                }
+            }
+            SelectedArea::Global => SelectedArea::Sequence(0),
+        }
+    }
+
+    fn prev(&mut self) {
+        *self = match self {
+            SelectedArea::Sequence(idx) => {
+                if *idx <= 0 {
+                    SelectedArea::Global
+                } else {
+                    SelectedArea::Sequence(*idx - 1)
+                }
+            }
+            SelectedArea::Global => SelectedArea::Sequence(2),
+        }
+    }
+}
+
+impl Selected {
+    fn next(&mut self) {
+        *self = match self {
+            Selected::Div => Selected::Dir,
+            Selected::Dir => Selected::Pitch,
+            Selected::Pitch => Selected::Div,
+        };
+    }
+
+    fn prev(&mut self) {
+        *self = match self {
+            Selected::Div => Selected::Pitch,
+            Selected::Dir => Selected::Div,
+            Selected::Pitch => Selected::Dir,
+        };
     }
 }
 
 pub struct State {
     pub exiting: bool,
     draw_data: Output<DrawData>,
-    selected_sequence: usize,
+    selected_area: SelectedArea,
+    selected_global: SelectedGlobal,
+    mode: Mode,
     sender: Sender<SetEvent>,
+    selected: Selected,
+    semitones: Vec<i8>,
+    attack: f32,
+    release: f32,
 }
 
 impl State {
@@ -141,113 +311,241 @@ impl State {
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                     match key_event.code {
                         KeyCode::Esc => self.exiting = true,
-                        KeyCode::Char('k') => self
-                            .sender
-                            .send(SetEvent::SetBmp(draw_data.bpm + 1.0))
-                            .unwrap(),
-                        KeyCode::Char('j') => self
-                            .sender
-                            .send(SetEvent::SetBmp(draw_data.bpm - 1.0))
-                            .unwrap(),
-                        KeyCode::Char('l') => self
-                            .sender
-                            .send(SetEvent::SetPitch((
-                                self.selected_sequence,
-                                draw_data.pitches[self.selected_sequence] + 0.1,
-                            )))
-                            .unwrap(),
-                        KeyCode::Char('h') => self
-                            .sender
-                            .send(SetEvent::SetPitch((
-                                self.selected_sequence,
-                                draw_data.pitches[self.selected_sequence] - 0.1,
-                            )))
-                            .unwrap(),
-                        KeyCode::Char('1') => self.sender.send(SetEvent::Record(0)).unwrap(),
-                        KeyCode::Char('2') => self.sender.send(SetEvent::Record(1)).unwrap(),
-                        KeyCode::Char('3') => self.sender.send(SetEvent::Record(2)).unwrap(),
-                        KeyCode::Char('4') => self.sender.send(SetEvent::Record(3)).unwrap(),
-                        KeyCode::Char('5') => self.sender.send(SetEvent::Record(4)).unwrap(),
-                        KeyCode::Char('6') => self.sender.send(SetEvent::Record(5)).unwrap(),
-                        KeyCode::Char('7') => self.sender.send(SetEvent::Record(6)).unwrap(),
-                        KeyCode::Char('8') => self.sender.send(SetEvent::Record(7)).unwrap(),
-                        KeyCode::Char('a') => self.selected_sequence = 0,
-                        KeyCode::Char('s') => self.selected_sequence = 1,
-                        KeyCode::Char('d') => self.selected_sequence = 2,
-                        KeyCode::Char('q') => self
-                            .sender
-                            .send(SetEvent::SetSubdivision((
-                                self.selected_sequence,
-                                Subdivision::Quarter,
-                            )))
-                            .unwrap(),
-                        KeyCode::Char('w') => self
-                            .sender
-                            .send(SetEvent::SetSubdivision((
-                                self.selected_sequence,
-                                Subdivision::Eighth,
-                            )))
-                            .unwrap(),
-                        KeyCode::Char('e') => self
-                            .sender
-                            .send(SetEvent::SetSubdivision((
-                                self.selected_sequence,
-                                Subdivision::Sixteenth,
-                            )))
-                            .unwrap(),
-                        KeyCode::Char('r') => self
-                            .sender
-                            .send(SetEvent::SetSubdivision((
-                                self.selected_sequence,
-                                Subdivision::ThirtySecond,
-                            )))
-                            .unwrap(),
-                        KeyCode::Char('t') => self
-                            .sender
-                            .send(SetEvent::SetSubdivision((
-                                self.selected_sequence,
-                                Subdivision::TripletQuarter,
-                            )))
-                            .unwrap(),
-                        KeyCode::Char('z') => self
-                            .sender
-                            .send(SetEvent::SetSubdivision((
-                                self.selected_sequence,
-                                Subdivision::TripletEighth,
-                            )))
-                            .unwrap(),
-                        KeyCode::Char('u') => self
-                            .sender
-                            .send(SetEvent::SetSubdivision((
-                                self.selected_sequence,
-                                Subdivision::TripletSixteenth,
-                            )))
-                            .unwrap(),
-                        KeyCode::Char('i') => self
-                            .sender
-                            .send(SetEvent::SetSubdivision((
-                                self.selected_sequence,
-                                Subdivision::DottedQuarter,
-                            )))
-                            .unwrap(),
-                        KeyCode::Char('o') => self
-                            .sender
-                            .send(SetEvent::SetSubdivision((
-                                self.selected_sequence,
-                                Subdivision::DottedEighth,
-                            )))
-                            .unwrap(),
-                        KeyCode::Char('p') => self
-                            .sender
-                            .send(SetEvent::SetSubdivision((
-                                self.selected_sequence,
-                                Subdivision::DottedSixteenth,
-                            )))
-                            .unwrap(),
-                        KeyCode::Enter => self
-                            .sender
-                            .send(SetEvent::Toggle(self.selected_sequence))
-                            .unwrap(),
+                        KeyCode::Char('m') => match self.mode {
+                            Mode::Record => self.mode = Mode::RangeStart,
+                            Mode::RangeStart => self.mode = Mode::RangeEnd,
+                            Mode::RangeEnd => self.mode = Mode::Record,
+                        },
+                        KeyCode::Char('j') => {
+                            self.selected_area.next();
+                        }
+                        KeyCode::Char('k') => {
+                            self.selected_area.prev();
+                        }
+                        KeyCode::Char('l') => match self.selected_area {
+                            SelectedArea::Sequence(_) => self.selected.next(),
+                            SelectedArea::Global => self.selected_global.next(),
+                        },
+                        KeyCode::Char('h') => match self.selected_area {
+                            SelectedArea::Sequence(_) => self.selected.prev(),
+                            SelectedArea::Global => self.selected_global.prev(),
+                        },
+                        KeyCode::Char('w') => match self.selected_area {
+                            SelectedArea::Sequence(idx) => match self.selected {
+                                Selected::Pitch => {
+                                    let semitone = &mut self.semitones[idx];
+                                    if *semitone >= 12 {
+                                        *semitone = -12;
+                                    } else {
+                                        *semitone += 1;
+                                    }
+                                    self.sender.send(SetEvent::SetPitch((idx, *semitone)))
+                                }
+                                .unwrap(),
+                                Selected::Div => self
+                                    .sender
+                                    .send(SetEvent::SetSubdivision((
+                                        idx,
+                                        draw_data.subdivisions[idx].next(),
+                                    )))
+                                    .unwrap(),
+                                Selected::Dir => self
+                                    .sender
+                                    .send(SetEvent::SetDir((idx, draw_data.dirs[idx].next())))
+                                    .unwrap(),
+                            },
+                            SelectedArea::Global => match self.selected_global {
+                                SelectedGlobal::Bpm => self
+                                    .sender
+                                    .send(SetEvent::SetBmp(draw_data.bpm + 1.0))
+                                    .unwrap(),
+                                SelectedGlobal::Att => {
+                                    let att = &mut self.attack;
+                                    if *att < 1.0 {
+                                        *att += 0.01;
+                                    }
+                                    self.sender.send(SetEvent::SetAttack(*att)).unwrap();
+                                }
+                                SelectedGlobal::Rel => {
+                                    let rel = &mut self.release;
+                                    if *rel < 1.0 {
+                                        *rel += 0.01;
+                                    }
+                                    self.sender.send(SetEvent::SetRelease(*rel)).unwrap();
+                                }
+                            },
+                        },
+                        KeyCode::Char('s') => match self.selected_area {
+                            SelectedArea::Sequence(idx) => match self.selected {
+                                Selected::Pitch => {
+                                    let semitone = &mut self.semitones[idx];
+                                    if *semitone <= -12 {
+                                        *semitone = 12;
+                                    } else {
+                                        *semitone -= 1;
+                                    }
+                                    self.sender.send(SetEvent::SetPitch((idx, *semitone)))
+                                }
+                                .unwrap(),
+                                Selected::Div => self
+                                    .sender
+                                    .send(SetEvent::SetSubdivision((
+                                        idx,
+                                        draw_data.subdivisions[idx].prev(),
+                                    )))
+                                    .unwrap(),
+                                Selected::Dir => self
+                                    .sender
+                                    .send(SetEvent::SetDir((idx, draw_data.dirs[idx].prev())))
+                                    .unwrap(),
+                            },
+                            SelectedArea::Global => match self.selected_global {
+                                SelectedGlobal::Bpm => self
+                                    .sender
+                                    .send(SetEvent::SetBmp(draw_data.bpm - 1.0))
+                                    .unwrap(),
+                                SelectedGlobal::Att => {
+                                    let att = &mut self.attack;
+                                    if *att > 0.01 {
+                                        *att -= 0.01;
+                                    }
+                                    self.sender.send(SetEvent::SetAttack(*att)).unwrap();
+                                }
+                                SelectedGlobal::Rel => {
+                                    let rel = &mut self.release;
+                                    if *rel > 0.01 {
+                                        *rel -= 0.01;
+                                    }
+                                    self.sender.send(SetEvent::SetRelease(*rel)).unwrap();
+                                }
+                            },
+                        },
+                        KeyCode::Char('1') => match self.mode {
+                            Mode::Record => self.sender.send(SetEvent::Record(0)).unwrap(),
+                            Mode::RangeStart => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeStart((idx, 0))).unwrap()
+                                }
+                                _ => {}
+                            },
+                            Mode::RangeEnd => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeEnd((idx, 0))).unwrap()
+                                }
+                                _ => {}
+                            },
+                        },
+                        KeyCode::Char('2') => match self.mode {
+                            Mode::Record => self.sender.send(SetEvent::Record(1)).unwrap(),
+                            Mode::RangeStart => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeStart((idx, 1))).unwrap()
+                                }
+                                _ => {}
+                            },
+                            Mode::RangeEnd => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeEnd((idx, 1))).unwrap()
+                                }
+                                _ => {}
+                            },
+                        },
+                        KeyCode::Char('3') => match self.mode {
+                            Mode::Record => self.sender.send(SetEvent::Record(2)).unwrap(),
+                            Mode::RangeStart => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeStart((idx, 2))).unwrap()
+                                }
+                                _ => {}
+                            },
+                            Mode::RangeEnd => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeEnd((idx, 2))).unwrap()
+                                }
+                                _ => {}
+                            },
+                        },
+                        KeyCode::Char('4') => match self.mode {
+                            Mode::Record => self.sender.send(SetEvent::Record(3)).unwrap(),
+                            Mode::RangeStart => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeStart((idx, 3))).unwrap()
+                                }
+                                _ => {}
+                            },
+                            Mode::RangeEnd => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeEnd((idx, 3))).unwrap()
+                                }
+                                _ => {}
+                            },
+                        },
+                        KeyCode::Char('5') => match self.mode {
+                            Mode::Record => self.sender.send(SetEvent::Record(4)).unwrap(),
+                            Mode::RangeStart => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeStart((idx, 4))).unwrap()
+                                }
+                                _ => {}
+                            },
+                            Mode::RangeEnd => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeEnd((idx, 4))).unwrap()
+                                }
+                                _ => {}
+                            },
+                        },
+                        KeyCode::Char('6') => match self.mode {
+                            Mode::Record => self.sender.send(SetEvent::Record(5)).unwrap(),
+                            Mode::RangeStart => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeStart((idx, 5))).unwrap()
+                                }
+                                _ => {}
+                            },
+                            Mode::RangeEnd => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeEnd((idx, 5))).unwrap()
+                                }
+                                _ => {}
+                            },
+                        },
+                        KeyCode::Char('7') => match self.mode {
+                            Mode::Record => self.sender.send(SetEvent::Record(6)).unwrap(),
+                            Mode::RangeStart => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeStart((idx, 6))).unwrap()
+                                }
+                                _ => {}
+                            },
+                            Mode::RangeEnd => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeEnd((idx, 6))).unwrap()
+                                }
+                                _ => {}
+                            },
+                        },
+                        KeyCode::Char('8') => match self.mode {
+                            Mode::Record => self.sender.send(SetEvent::Record(7)).unwrap(),
+                            Mode::RangeStart => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeStart((idx, 7))).unwrap()
+                                }
+                                _ => {}
+                            },
+                            Mode::RangeEnd => match self.selected_area {
+                                SelectedArea::Sequence(idx) => {
+                                    self.sender.send(SetEvent::SetRangeEnd((idx, 7))).unwrap()
+                                }
+                                _ => {}
+                            },
+                        },
+                        KeyCode::Char(' ') => match self.selected_area {
+                            SelectedArea::Sequence(idx) => {
+                                self.sender.send(SetEvent::Toggle(idx)).unwrap()
+                            }
+                            _ => {}
+                        },
                         _ => {}
                     };
                 }

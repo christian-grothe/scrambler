@@ -9,11 +9,9 @@ pub const VOICE_NUM: u8 = 32;
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(dead_code)]
 pub enum Subdivision {
-    Half,             // Half note (1/2)
     Quarter,          // Quarter note (1/4)
     Eighth,           // Eighth note (1/8)
     Sixteenth,        // Sixteenth note (1/16)
-    ThirtySecond,     // Thirty-second note (1/32)
     TripletQuarter,   // Quarter-note triplet
     TripletEighth,    // Eighth-note triplet
     TripletSixteenth, // Sixteenth-note triplet
@@ -26,10 +24,8 @@ impl Subdivision {
     fn factor(self) -> f32 {
         match self {
             Subdivision::Quarter => 1.0,
-            Subdivision::Half => 2.0,
             Subdivision::Eighth => 0.5,
             Subdivision::Sixteenth => 0.25,
-            Subdivision::ThirtySecond => 0.125,
             Subdivision::TripletQuarter => 2.0 / 3.0,
             Subdivision::TripletEighth => 1.0 / 3.0,
             Subdivision::TripletSixteenth => 1.0 / 6.0,
@@ -46,16 +42,42 @@ impl Subdivision {
     pub fn get_symbol(&self) -> &str {
         match self {
             Subdivision::Quarter => "1/4",
-            Subdivision::Half => "2/4",
             Subdivision::Eighth => "1/8",
             Subdivision::Sixteenth => "1/16",
-            Subdivision::ThirtySecond => "1/32",
             Subdivision::TripletQuarter => "1/4t",
             Subdivision::TripletEighth => "1/8t",
             Subdivision::TripletSixteenth => "1/16t",
             Subdivision::DottedQuarter => "1/4.",
             Subdivision::DottedEighth => "1/8.",
             Subdivision::DottedSixteenth => "1/16.",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            Subdivision::Quarter => Subdivision::Eighth,
+            Subdivision::Eighth => Subdivision::Sixteenth,
+            Subdivision::Sixteenth => Subdivision::TripletQuarter,
+            Subdivision::TripletQuarter => Subdivision::TripletEighth,
+            Subdivision::TripletEighth => Subdivision::TripletSixteenth,
+            Subdivision::TripletSixteenth => Subdivision::DottedQuarter,
+            Subdivision::DottedQuarter => Subdivision::DottedEighth,
+            Subdivision::DottedEighth => Subdivision::DottedSixteenth,
+            Subdivision::DottedSixteenth => Subdivision::Quarter,
+        }
+    }
+
+    pub fn prev(&self) -> Self {
+        match self {
+            Subdivision::Quarter => Subdivision::DottedSixteenth,
+            Subdivision::Eighth => Subdivision::Quarter,
+            Subdivision::Sixteenth => Subdivision::Eighth,
+            Subdivision::TripletQuarter => Subdivision::Sixteenth,
+            Subdivision::TripletEighth => Subdivision::TripletQuarter,
+            Subdivision::TripletSixteenth => Subdivision::TripletEighth,
+            Subdivision::DottedQuarter => Subdivision::TripletSixteenth,
+            Subdivision::DottedEighth => Subdivision::DottedQuarter,
+            Subdivision::DottedSixteenth => Subdivision::DottedEighth,
         }
     }
 }
@@ -66,6 +88,7 @@ pub struct DrawData {
     pub subdivisions: Vec<Subdivision>,
     pub pitches: Vec<f32>,
     pub ranges: Vec<(u8, u8)>,
+    pub dirs: Vec<PlayMode>,
     pub bpm: f32,
     pub transporter: (u8, u8, u8),
 }
@@ -79,6 +102,7 @@ impl DrawData {
             subdivisions: vec![Subdivision::Quarter; SEQUENCES as usize],
             pitches: vec![1.0; SEQUENCES as usize],
             ranges: vec![(0, 0); SEQUENCES as usize],
+            dirs: vec![PlayMode::Forwards; SEQUENCES as usize],
         }
     }
 }
@@ -153,6 +177,7 @@ impl Sequencer {
         let transporter = &mut draw_data.transporter;
         let pitches = &mut draw_data.pitches;
         let ranges = &mut draw_data.ranges;
+        let dirs = &mut draw_data.dirs;
 
         for step in self.steps.iter_mut() {
             if step.is_recording {
@@ -168,6 +193,7 @@ impl Sequencer {
             positions[i] = sequence.current_step;
             pitches[i] = sequence.pitch;
             ranges[i] = sequence.play_range;
+            dirs[i] = sequence.play_mode.clone();
             if let Some(subdivision) = sequence.next_subdivision {
                 subdivisions[i] = subdivision;
             } else {
@@ -198,9 +224,40 @@ impl Sequencer {
         }
     }
 
-    pub fn set_pitch(&mut self, idx: usize, pitch: f32) {
+    pub fn set_pitch(&mut self, idx: usize, semitone: i8) {
+        let pitch = 2.0f32.powf(semitone as f32 / 12.0);
         if let Some(sequence) = self.sequences.get_mut(idx) {
             sequence.pitch = pitch;
+        }
+    }
+
+    pub fn set_range_start(&mut self, idx: usize, start: u8) {
+        if let Some(sequence) = self.sequences.get_mut(idx) {
+            sequence.set_range_start(start);
+        }
+    }
+
+    pub fn set_range_end(&mut self, idx: usize, end: u8) {
+        if let Some(sequence) = self.sequences.get_mut(idx) {
+            sequence.set_range_end(end);
+        }
+    }
+
+    pub fn set_play_mode(&mut self, idx: usize, playmode: PlayMode) {
+        if let Some(sequence) = self.sequences.get_mut(idx) {
+            sequence.play_mode = playmode;
+        }
+    }
+
+    pub fn set_attack(&mut self, val: f32) {
+        for step in self.steps.iter_mut() {
+            step.set_attack(val)
+        }
+    }
+
+    pub fn set_release(&mut self, val: f32) {
+        for step in self.steps.iter_mut() {
+            step.set_release(val)
         }
     }
 
@@ -292,6 +349,7 @@ struct Voice {
     env_state: EnvState,
     buffer_size: usize,
     pitch: f32,
+    sample_rate: f32,
 }
 
 impl Voice {
@@ -300,11 +358,12 @@ impl Voice {
             play_head: 0.0,
             is_playing: false,
             gain: 0.0,
-            gain_inc_attack: 50.0 / sample_rate,
-            gain_inc_release: 5.0 / sample_rate,
+            gain_inc_attack: 1.0 / sample_rate / 0.01,
+            gain_inc_release: 1.0 / sample_rate / 1.0,
             env_state: EnvState::Attack,
             buffer_size,
             pitch: 4.0,
+            sample_rate,
         }
     }
 
@@ -331,6 +390,14 @@ impl Voice {
 
         (self.play_head, self.gain)
     }
+
+    fn set_attack(&mut self, val: f32) {
+        self.gain_inc_attack = 1.0 / self.sample_rate / val;
+    }
+
+    fn set_release(&mut self, val: f32) {
+        self.gain_inc_release = 1.0 / self.sample_rate / val;
+    }
 }
 
 struct Step {
@@ -356,6 +423,18 @@ impl Step {
                 }
                 voices
             },
+        }
+    }
+
+    fn set_attack(&mut self, val: f32) {
+        for voice in self.voices.iter_mut() {
+            voice.set_attack(val);
+        }
+    }
+
+    fn set_release(&mut self, val: f32) {
+        for voice in self.voices.iter_mut() {
+            voice.set_release(val);
         }
     }
 
@@ -403,10 +482,37 @@ enum PlayState {
     Resume,
 }
 
-enum PlayMode {
+#[derive(Clone)]
+pub enum PlayMode {
     Forwards,
     Backwards,
     BackAndForth(u8),
+}
+
+impl PlayMode {
+    pub fn get_symbol(&self) -> &str {
+        match self {
+            PlayMode::Forwards => ">>",
+            PlayMode::Backwards => "<<",
+            PlayMode::BackAndForth(_) => "<>",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            PlayMode::Forwards => PlayMode::Backwards,
+            PlayMode::Backwards => PlayMode::BackAndForth(0),
+            PlayMode::BackAndForth(_) => PlayMode::Forwards,
+        }
+    }
+
+    pub fn prev(&self) -> Self {
+        match self {
+            PlayMode::Forwards => PlayMode::BackAndForth(0),
+            PlayMode::Backwards => PlayMode::Forwards,
+            PlayMode::BackAndForth(_) => PlayMode::Backwards,
+        }
+    }
 }
 
 struct Sequence {
@@ -438,6 +544,20 @@ impl Sequence {
             play_state: PlayState::Stopped,
             play_mode,
             play_range,
+        }
+    }
+
+    fn set_range_start(&mut self, pos: u8) {
+        self.play_range.0 = pos;
+        if self.play_range.0 > self.play_range.1 {
+            self.play_range.1 = pos;
+        }
+    }
+
+    fn set_range_end(&mut self, pos: u8) {
+        self.play_range.1 = pos;
+        if self.play_range.1 < self.play_range.0 {
+            self.play_range.0 = pos;
         }
     }
 
