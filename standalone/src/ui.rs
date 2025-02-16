@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-use sequence_core::{DrawData, Output, STEP_NUM};
+use scrambler_core::{DrawData, Output, STEP_NUM};
 use symbols::{
     BLANK, FULL, RANGE_END, RANGE_SINGLE, RANGE_START, SELECTED, STEP_ACTIVE, STEP_INACTIVE,
 };
@@ -34,8 +34,8 @@ impl Ui {
                 selected_area: SelectedArea::Sequence(0),
                 selected_global: SelectedGlobal::Bpm,
                 semitones: vec![0; 3],
-                attack: 0.01,
-                release: 1.0,
+                attack: 0.02,
+                release: 0.99,
             },
         }
     }
@@ -67,6 +67,7 @@ impl Ui {
             .constraints(vec![
                 Constraint::Length(1), // transporter
                 Constraint::Length(2), // status
+                Constraint::Length(2), // steps
                 Constraint::Min(0),    // steps
             ])
             .split(layout_horizontal[1]);
@@ -74,10 +75,11 @@ impl Ui {
         let sequences = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![Constraint::Length(5); positions.len()])
-            .split(main_area[2]);
+            .split(main_area[3]);
 
         let mode = match self.state.mode {
             Mode::Record => "rec",
+            Mode::Erase => "erase",
             Mode::RangeStart => "range start",
             Mode::RangeEnd => "range end",
         };
@@ -86,7 +88,6 @@ impl Ui {
             Span::from(format!(" BPM: {} ", draw_data.bpm)),
             Span::from(format!("   att: {:.2} ", self.state.attack)),
             Span::from(format!("   rel: {:.2} ", self.state.release)),
-            Span::from(format!(" |  Mode: {} ", mode)),
         ];
 
         if self.state.selected_area == SelectedArea::Global {
@@ -114,14 +115,28 @@ impl Ui {
 
         frame.render_widget(status_bar, main_area[1]);
 
-        let transporter_span = vec![Span::from(format!(
-            " {}:{} ",
-            draw_data.transporter.1 + 1,
-            draw_data.transporter.2 + 1
-        ))];
+        let transporter_span = vec![
+            Span::from(format!(
+                " {}:{}   |",
+                draw_data.transporter.1 + 1,
+                draw_data.transporter.2 + 1
+            )),
+            Span::from(format!("   Mode: {}", mode)),
+        ];
         frame.render_widget(
             Paragraph::new(Text::from(Line::from(transporter_span))),
             main_area[0],
+        );
+
+        let step_status_span: Vec<Span> = draw_data
+            .step_states
+            .iter()
+            .map(|state| Span::from(state.get_symbol()))
+            .collect();
+
+        frame.render_widget(
+            Paragraph::new(Text::from(Line::from(step_status_span))),
+            main_area[2],
         );
 
         for (i, position) in positions.iter().enumerate() {
@@ -202,6 +217,7 @@ impl Ui {
 
 enum Mode {
     Record,
+    Erase,
     RangeStart,
     RangeEnd,
 }
@@ -312,7 +328,8 @@ impl State {
                     match key_event.code {
                         KeyCode::Esc => self.exiting = true,
                         KeyCode::Char('m') => match self.mode {
-                            Mode::Record => self.mode = Mode::RangeStart,
+                            Mode::Record => self.mode = Mode::Erase,
+                            Mode::Erase => self.mode = Mode::RangeStart,
                             Mode::RangeStart => self.mode = Mode::RangeEnd,
                             Mode::RangeEnd => self.mode = Mode::Record,
                         },
@@ -330,7 +347,7 @@ impl State {
                             SelectedArea::Sequence(_) => self.selected.prev(),
                             SelectedArea::Global => self.selected_global.prev(),
                         },
-                        KeyCode::Char('w') => match self.selected_area {
+                        KeyCode::Char('K') => match self.selected_area {
                             SelectedArea::Sequence(idx) => match self.selected {
                                 Selected::Pitch => {
                                     let semitone = &mut self.semitones[idx];
@@ -361,21 +378,23 @@ impl State {
                                     .unwrap(),
                                 SelectedGlobal::Att => {
                                     let att = &mut self.attack;
-                                    if *att < 1.0 {
-                                        *att += 0.01;
+                                    *att += 0.01;
+                                    if *att >= 0.99 {
+                                        *att = 0.99;
                                     }
                                     self.sender.send(SetEvent::SetAttack(*att)).unwrap();
                                 }
                                 SelectedGlobal::Rel => {
                                     let rel = &mut self.release;
-                                    if *rel < 1.0 {
-                                        *rel += 0.01;
+                                    *rel += 0.01;
+                                    if *rel >= 0.99 {
+                                        *rel = 0.99
                                     }
                                     self.sender.send(SetEvent::SetRelease(*rel)).unwrap();
                                 }
                             },
                         },
-                        KeyCode::Char('s') => match self.selected_area {
+                        KeyCode::Char('J') => match self.selected_area {
                             SelectedArea::Sequence(idx) => match self.selected {
                                 Selected::Pitch => {
                                     let semitone = &mut self.semitones[idx];
@@ -406,15 +425,17 @@ impl State {
                                     .unwrap(),
                                 SelectedGlobal::Att => {
                                     let att = &mut self.attack;
-                                    if *att > 0.01 {
-                                        *att -= 0.01;
+                                    *att -= 0.01;
+                                    if *att <= 0.02 {
+                                        *att = 0.02
                                     }
                                     self.sender.send(SetEvent::SetAttack(*att)).unwrap();
                                 }
                                 SelectedGlobal::Rel => {
                                     let rel = &mut self.release;
-                                    if *rel > 0.01 {
-                                        *rel -= 0.01;
+                                    *rel -= 0.01;
+                                    if *rel <= 0.02 {
+                                        *rel = 0.02
                                     }
                                     self.sender.send(SetEvent::SetRelease(*rel)).unwrap();
                                 }
@@ -422,6 +443,7 @@ impl State {
                         },
                         KeyCode::Char('1') => match self.mode {
                             Mode::Record => self.sender.send(SetEvent::Record(0)).unwrap(),
+                            Mode::Erase => self.sender.send(SetEvent::Erase(0)).unwrap(),
                             Mode::RangeStart => match self.selected_area {
                                 SelectedArea::Sequence(idx) => {
                                     self.sender.send(SetEvent::SetRangeStart((idx, 0))).unwrap()
@@ -437,6 +459,7 @@ impl State {
                         },
                         KeyCode::Char('2') => match self.mode {
                             Mode::Record => self.sender.send(SetEvent::Record(1)).unwrap(),
+                            Mode::Erase => self.sender.send(SetEvent::Erase(1)).unwrap(),
                             Mode::RangeStart => match self.selected_area {
                                 SelectedArea::Sequence(idx) => {
                                     self.sender.send(SetEvent::SetRangeStart((idx, 1))).unwrap()
@@ -452,6 +475,7 @@ impl State {
                         },
                         KeyCode::Char('3') => match self.mode {
                             Mode::Record => self.sender.send(SetEvent::Record(2)).unwrap(),
+                            Mode::Erase => self.sender.send(SetEvent::Erase(2)).unwrap(),
                             Mode::RangeStart => match self.selected_area {
                                 SelectedArea::Sequence(idx) => {
                                     self.sender.send(SetEvent::SetRangeStart((idx, 2))).unwrap()
@@ -467,6 +491,7 @@ impl State {
                         },
                         KeyCode::Char('4') => match self.mode {
                             Mode::Record => self.sender.send(SetEvent::Record(3)).unwrap(),
+                            Mode::Erase => self.sender.send(SetEvent::Erase(3)).unwrap(),
                             Mode::RangeStart => match self.selected_area {
                                 SelectedArea::Sequence(idx) => {
                                     self.sender.send(SetEvent::SetRangeStart((idx, 3))).unwrap()
@@ -482,6 +507,7 @@ impl State {
                         },
                         KeyCode::Char('5') => match self.mode {
                             Mode::Record => self.sender.send(SetEvent::Record(4)).unwrap(),
+                            Mode::Erase => self.sender.send(SetEvent::Erase(4)).unwrap(),
                             Mode::RangeStart => match self.selected_area {
                                 SelectedArea::Sequence(idx) => {
                                     self.sender.send(SetEvent::SetRangeStart((idx, 4))).unwrap()
@@ -497,6 +523,7 @@ impl State {
                         },
                         KeyCode::Char('6') => match self.mode {
                             Mode::Record => self.sender.send(SetEvent::Record(5)).unwrap(),
+                            Mode::Erase => self.sender.send(SetEvent::Erase(5)).unwrap(),
                             Mode::RangeStart => match self.selected_area {
                                 SelectedArea::Sequence(idx) => {
                                     self.sender.send(SetEvent::SetRangeStart((idx, 5))).unwrap()
@@ -512,6 +539,7 @@ impl State {
                         },
                         KeyCode::Char('7') => match self.mode {
                             Mode::Record => self.sender.send(SetEvent::Record(6)).unwrap(),
+                            Mode::Erase => self.sender.send(SetEvent::Erase(6)).unwrap(),
                             Mode::RangeStart => match self.selected_area {
                                 SelectedArea::Sequence(idx) => {
                                     self.sender.send(SetEvent::SetRangeStart((idx, 6))).unwrap()
@@ -527,6 +555,7 @@ impl State {
                         },
                         KeyCode::Char('8') => match self.mode {
                             Mode::Record => self.sender.send(SetEvent::Record(7)).unwrap(),
+                            Mode::Erase => self.sender.send(SetEvent::Erase(7)).unwrap(),
                             Mode::RangeStart => match self.selected_area {
                                 SelectedArea::Sequence(idx) => {
                                     self.sender.send(SetEvent::SetRangeStart((idx, 7))).unwrap()

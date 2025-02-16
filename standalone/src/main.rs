@@ -9,13 +9,16 @@ use ratatui::crossterm::{
     event::{KeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
     execute,
 };
-use sequence_core::{PlayMode, Subdivision};
+
+use scrambler_core::*;
+
 
 mod ui;
 
 enum SetEvent {
     SetBmp(f32),
     Record(usize),
+    Erase(usize),
     SetSubdivision((usize, Subdivision)),
     Toggle(usize),
     SetPitch((usize, i8)),
@@ -41,13 +44,13 @@ fn main() -> io::Result<()> {
 
     let input_port = client.register_port("input", AudioIn::default()).unwrap();
 
-    let (sequencer, draw_data) = sequence_core::Sequencer::new(48000.0);
+    let (sequencer, draw_data) = scrambler_core::Sequencer::new(48000.0);
 
     struct State {
         input: Port<AudioIn>,
         output_l: Port<AudioOut>,
         //output_r: Port<AudioOut>,
-        sequencer: sequence_core::Sequencer,
+        sequencer: scrambler_core::Sequencer,
         receiver: Receiver<SetEvent>,
     }
 
@@ -72,6 +75,7 @@ fn main() -> io::Result<()> {
                 match event {
                     SetEvent::SetBmp(val) => state.sequencer.set_bpm(val),
                     SetEvent::Record(idx) => state.sequencer.record(idx),
+                    SetEvent::Erase(idx) => state.sequencer.erase(idx),
                     SetEvent::SetSubdivision((index, val)) => {
                         state.sequencer.set_subdivision(index, val)
                     }

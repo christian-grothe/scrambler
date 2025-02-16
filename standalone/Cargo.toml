@@ -7,4 +7,4 @@ edition = "2021"
 crossbeam = "0.8.4"
 jack = "0.13.0"
 ratatui = "0.29.0"
-sequence_core = { path = "../sequence_core" }
+scrambler_core = { path = "../scrambler_core" }
