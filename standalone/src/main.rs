@@ -12,7 +12,6 @@ use ratatui::crossterm::{
 
 use scrambler_core::*;
 
-
 mod ui;
 
 enum SetEvent {
@@ -27,6 +26,7 @@ enum SetEvent {
     SetDir((usize, PlayMode)),
     SetAttack(f32),
     SetRelease(f32),
+    SetGain((usize, f32)),
 }
 
 fn main() -> io::Result<()> {
@@ -92,6 +92,7 @@ fn main() -> io::Result<()> {
                     }
                     SetEvent::SetAttack(val) => state.sequencer.set_attack(val),
                     SetEvent::SetRelease(val) => state.sequencer.set_release(val),
+                    SetEvent::SetGain((index, val)) => state.sequencer.set_gain(val, index),
                 }
             }
 

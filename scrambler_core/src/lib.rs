@@ -24,6 +24,7 @@ pub struct DrawData {
     pub step_states: Vec<StepState>,
     pub bpm: f32,
     pub transporter: (u8, u8, u8),
+    pub gains: Vec<f32>,
 }
 
 impl DrawData {
@@ -37,6 +38,7 @@ impl DrawData {
             ranges: vec![(0, 0); SEQUENCES as usize],
             dirs: vec![PlayMode::Forwards; SEQUENCES as usize],
             step_states: vec![StepState::Empty; STEP_NUM as usize],
+            gains: vec![0.8; SEQUENCES as usize],
         }
     }
 }
@@ -71,7 +73,7 @@ impl Sequencer {
                         sample_rate,
                         bpm,
                         Subdivision::Eighth,
-                        1.5,
+                        1.0,
                         (3, 6),
                         PlayMode::Backwards,
                     ));
@@ -79,15 +81,10 @@ impl Sequencer {
                         sample_rate,
                         bpm,
                         Subdivision::Sixteenth,
-                        2.0,
+                        1.0,
                         (4, 7),
                         PlayMode::BackAndForth(0),
                     ));
-                    // sequences.push(Sequence::new(
-                    //     sample_rate,
-                    //     bpm,
-                    //     Subdivision::DottedSixteenth,
-                    // ));
                     sequences
                 },
                 steps: {
@@ -113,6 +110,7 @@ impl Sequencer {
         let ranges = &mut draw_data.ranges;
         let dirs = &mut draw_data.dirs;
         let step_states = &mut draw_data.step_states;
+        let gains = &mut draw_data.gains;
 
         for step in self.steps.iter_mut() {
             if step.state == StepState::Recording {
@@ -120,15 +118,19 @@ impl Sequencer {
             }
         }
 
+        let mut output = 0.0;
+
         let apply = self.transporter.update();
         for (i, sequence) in self.sequences.iter_mut().enumerate() {
-            if let Some((step, pitch)) = sequence.update(apply, self.bpm) {
-                self.steps[step as usize].play(pitch);
+            if let Some((step, pitch, gain)) = sequence.update(apply, self.bpm) {
+                self.steps[step as usize].play(pitch, gain);
             }
             positions[i] = sequence.current_step;
             pitches[i] = sequence.pitch;
             ranges[i] = sequence.play_range;
             dirs[i] = sequence.play_mode.clone();
+            gains[i] = sequence.gain;
+
             if let Some(subdivision) = sequence.next_subdivision {
                 subdivisions[i] = subdivision;
             } else {
@@ -148,7 +150,6 @@ impl Sequencer {
         *bpm = self.bpm;
         self.draw_data.publish();
 
-        let mut output = 0.0;
         for step in self.steps.iter_mut() {
             output += step.render();
         }
@@ -197,6 +198,12 @@ impl Sequencer {
     pub fn set_attack(&mut self, val: f32) {
         for step in self.steps.iter_mut() {
             step.set_attack(val)
+        }
+    }
+
+    pub fn set_gain(&mut self, val: f32, sequence: usize) {
+        if let Some(sequence) = self.sequences.get_mut(sequence) {
+            sequence.gain = val
         }
     }
 

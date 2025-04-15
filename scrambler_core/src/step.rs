@@ -68,10 +68,11 @@ impl Step {
         self.record_head = 0;
     }
 
-    pub fn play(&mut self, pitch: f32) {
+    pub fn play(&mut self, pitch: f32, gain: f32) {
         for voice in self.voices.iter_mut() {
             if !voice.is_playing {
                 voice.pitch = pitch;
+                voice.gain = gain;
                 voice.is_playing = true;
                 break;
             }
@@ -82,14 +83,14 @@ impl Step {
         let mut sample = 0.0;
         for voice in self.voices.iter_mut() {
             if voice.is_playing {
-                let (pos, gain) = voice.render();
+                let (pos, env, gain) = voice.render();
                 let pos_int = pos as usize;
                 let next_pos = (pos_int + 1) % self.buffer.len();
                 let frac = pos - pos_int as f32;
 
                 let next_sample =
                     self.buffer[pos_int] * (1.0 - frac) + self.buffer[next_pos] * frac;
-                sample += next_sample * gain;
+                sample += next_sample * env * gain;
             }
         }
         sample

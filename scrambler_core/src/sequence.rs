@@ -49,6 +49,7 @@ pub struct Sequence {
     pub play_state: PlayState,
     pub play_mode: PlayMode,
     pub play_range: (u8, u8),
+    pub gain: f32,
 }
 
 impl Sequence {
@@ -69,6 +70,7 @@ impl Sequence {
             play_state: PlayState::Stopped,
             play_mode,
             play_range,
+            gain: 0.8,
         }
     }
 
@@ -97,7 +99,7 @@ impl Sequence {
         }
     }
 
-    pub fn update(&mut self, apply_change: bool, current_bpm: f32) -> Option<(u8, f32)> {
+    pub fn update(&mut self, apply_change: bool, current_bpm: f32) -> Option<(u8, f32, f32)> {
         if apply_change {
             if self.play_state == PlayState::Resume {
                 self.play_state = PlayState::Playing;
@@ -138,7 +140,7 @@ impl Sequence {
                     }
                 }
             }
-            Some((self.current_step, self.pitch))
+            Some((self.current_step, self.pitch, self.gain))
         }
     }
 

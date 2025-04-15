@@ -185,7 +185,7 @@ impl Ui {
                 Span::from(format!(" Div: {} ", draw_data.subdivisions[i].get_symbol())),
                 Span::from(format!(" Dir: {} ", draw_data.dirs[i].get_symbol())),
                 Span::from(format!(" Pitch: {} ", self.state.semitones[i])),
-                //Span::from(format!(" Gain: {} ", "GAIN")),
+                Span::from(format!(" Gain: {:.1} ", draw_data.gains[i])),
             ];
 
             if self.state.selected_area == SelectedArea::Sequence(i) {
@@ -202,6 +202,11 @@ impl Ui {
                     }
                     Selected::Pitch => {
                         param_lines[2] = param_lines[2]
+                            .clone()
+                            .style(Style::default().fg(Color::Red))
+                    }
+                    Selected::Gain => {
+                        param_lines[3] = param_lines[3]
                             .clone()
                             .style(Style::default().fg(Color::Red))
                     }
@@ -227,6 +232,7 @@ enum Selected {
     Div,
     Dir,
     Pitch,
+    Gain,
 }
 
 #[derive(PartialEq)]
@@ -293,15 +299,17 @@ impl Selected {
         *self = match self {
             Selected::Div => Selected::Dir,
             Selected::Dir => Selected::Pitch,
-            Selected::Pitch => Selected::Div,
+            Selected::Pitch => Selected::Gain,
+            Selected::Gain => Selected::Div,
         };
     }
 
     fn prev(&mut self) {
         *self = match self {
-            Selected::Div => Selected::Pitch,
+            Selected::Div => Selected::Gain,
+            Selected::Gain => Selected::Dir,
             Selected::Dir => Selected::Div,
-            Selected::Pitch => Selected::Dir,
+            Selected::Pitch => Selected::Div,
         };
     }
 }
@@ -370,6 +378,10 @@ impl State {
                                     .sender
                                     .send(SetEvent::SetDir((idx, draw_data.dirs[idx].next())))
                                     .unwrap(),
+                                Selected::Gain => self
+                                    .sender
+                                    .send(SetEvent::SetGain((idx, draw_data.gains[idx] + 0.1)))
+                                    .unwrap(),
                             },
                             SelectedArea::Global => match self.selected_global {
                                 SelectedGlobal::Bpm => self
@@ -416,6 +428,10 @@ impl State {
                                 Selected::Dir => self
                                     .sender
                                     .send(SetEvent::SetDir((idx, draw_data.dirs[idx].prev())))
+                                    .unwrap(),
+                                Selected::Gain => self
+                                    .sender
+                                    .send(SetEvent::SetGain((idx, draw_data.gains[idx] - 0.1)))
                                     .unwrap(),
                             },
                             SelectedArea::Global => match self.selected_global {
