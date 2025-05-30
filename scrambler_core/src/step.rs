@@ -68,7 +68,10 @@ impl Step {
         self.record_head = 0;
     }
 
-    pub fn play(&mut self, pitch: f32, gain: f32) {
+    pub fn play(&mut self, pitch: f32, gain: f32, attack: f32, release: f32) {
+        self.set_attack(attack);
+        self.set_release(release);
+
         for voice in self.voices.iter_mut() {
             if !voice.is_playing {
                 voice.pitch = pitch;

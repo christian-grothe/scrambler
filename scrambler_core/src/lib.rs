@@ -25,6 +25,8 @@ pub struct DrawData {
     pub bpm: f32,
     pub transporter: (u8, u8, u8),
     pub gains: Vec<f32>,
+    pub attacks: Vec<f32>,
+    pub releases: Vec<f32>,
 }
 
 impl DrawData {
@@ -39,6 +41,8 @@ impl DrawData {
             dirs: vec![PlayMode::Forwards; SEQUENCES as usize],
             step_states: vec![StepState::Empty; STEP_NUM as usize],
             gains: vec![0.8; SEQUENCES as usize],
+            attacks: vec![0.2; SEQUENCES as usize],
+            releases: vec![0.8; SEQUENCES as usize],
         }
     }
 }
@@ -111,6 +115,8 @@ impl Sequencer {
         let dirs = &mut draw_data.dirs;
         let step_states = &mut draw_data.step_states;
         let gains = &mut draw_data.gains;
+        let attacks = &mut draw_data.attacks;
+        let releases = &mut draw_data.releases;
 
         for step in self.steps.iter_mut() {
             if step.state == StepState::Recording {
@@ -122,14 +128,16 @@ impl Sequencer {
 
         let apply = self.transporter.update();
         for (i, sequence) in self.sequences.iter_mut().enumerate() {
-            if let Some((step, pitch, gain)) = sequence.update(apply, self.bpm) {
-                self.steps[step as usize].play(pitch, gain);
+            if let Some((step, pitch, gain, attack, release)) = sequence.update(apply, self.bpm) {
+                self.steps[step as usize].play(pitch, gain, attack, release);
             }
             positions[i] = sequence.current_step;
             pitches[i] = sequence.pitch;
             ranges[i] = sequence.play_range;
             dirs[i] = sequence.play_mode.clone();
             gains[i] = sequence.gain;
+            attacks[i] = sequence.attack;
+            releases[i] = sequence.release;
 
             if let Some(subdivision) = sequence.next_subdivision {
                 subdivisions[i] = subdivision;
@@ -195,21 +203,21 @@ impl Sequencer {
         }
     }
 
-    pub fn set_attack(&mut self, val: f32) {
-        for step in self.steps.iter_mut() {
-            step.set_attack(val)
+    pub fn set_attack(&mut self, val: f32, sequence: usize) {
+        if let Some(sequence) = self.sequences.get_mut(sequence) {
+            sequence.set_attack(val);
+        }
+    }
+
+    pub fn set_release(&mut self, val: f32, sequence: usize) {
+        if let Some(sequence) = self.sequences.get_mut(sequence) {
+            sequence.set_release(val);
         }
     }
 
     pub fn set_gain(&mut self, val: f32, sequence: usize) {
         if let Some(sequence) = self.sequences.get_mut(sequence) {
             sequence.gain = val
-        }
-    }
-
-    pub fn set_release(&mut self, val: f32) {
-        for step in self.steps.iter_mut() {
-            step.set_release(val)
         }
     }
 

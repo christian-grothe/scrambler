@@ -50,6 +50,8 @@ pub struct Sequence {
     pub play_mode: PlayMode,
     pub play_range: (u8, u8),
     pub gain: f32,
+    pub attack: f32,
+    pub release: f32,
 }
 
 impl Sequence {
@@ -71,6 +73,8 @@ impl Sequence {
             play_mode,
             play_range,
             gain: 0.8,
+            attack: 0.2,
+            release: 0.8,
         }
     }
 
@@ -88,6 +92,14 @@ impl Sequence {
         }
     }
 
+    pub fn set_attack(&mut self, attack: f32){
+        self.attack = attack;
+    }
+
+    pub fn set_release(&mut self, release: f32){
+        self.release = release;
+    }
+
     pub fn toggle(&mut self) {
         match self.play_state {
             PlayState::Playing => {
@@ -99,7 +111,11 @@ impl Sequence {
         }
     }
 
-    pub fn update(&mut self, apply_change: bool, current_bpm: f32) -> Option<(u8, f32, f32)> {
+    pub fn update(
+        &mut self,
+        apply_change: bool,
+        current_bpm: f32,
+    ) -> Option<(u8, f32, f32, f32, f32)> {
         if apply_change {
             if self.play_state == PlayState::Resume {
                 self.play_state = PlayState::Playing;
@@ -140,7 +156,13 @@ impl Sequence {
                     }
                 }
             }
-            Some((self.current_step, self.pitch, self.gain))
+            Some((
+                self.current_step,
+                self.pitch,
+                self.gain,
+                self.attack,
+                self.release,
+            ))
         }
     }
 

@@ -34,8 +34,6 @@ impl Ui {
                 selected_area: SelectedArea::Sequence(0),
                 selected_global: SelectedGlobal::Bpm,
                 semitones: vec![0; 3],
-                attack: 0.02,
-                release: 0.99,
             },
         }
     }
@@ -55,12 +53,10 @@ impl Ui {
             .direction(Direction::Horizontal)
             .constraints(vec![
                 Constraint::Min(0),
-                Constraint::Length(50),
+                Constraint::Length(60),
                 Constraint::Min(0),
             ])
             .split(layout_vertical[1]);
-
-        let positions = &draw_data.positions;
 
         let main_area = Layout::default()
             .direction(Direction::Vertical)
@@ -72,6 +68,7 @@ impl Ui {
             ])
             .split(layout_horizontal[1]);
 
+        let positions = &draw_data.positions;
         let sequences = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![Constraint::Length(5); positions.len()])
@@ -84,26 +81,12 @@ impl Ui {
             Mode::RangeEnd => "range end",
         };
 
-        let mut status_spans = vec![
-            Span::from(format!(" BPM: {} ", draw_data.bpm)),
-            Span::from(format!("   att: {:.2} ", self.state.attack)),
-            Span::from(format!("   rel: {:.2} ", self.state.release)),
-        ];
+        let mut status_spans = vec![Span::from(format!(" BPM: {} ", draw_data.bpm))];
 
         if self.state.selected_area == SelectedArea::Global {
             match self.state.selected_global {
                 SelectedGlobal::Bpm => {
                     status_spans[0] = status_spans[0]
-                        .clone()
-                        .style(Style::default().fg(Color::Red))
-                }
-                SelectedGlobal::Att => {
-                    status_spans[1] = status_spans[1]
-                        .clone()
-                        .style(Style::default().fg(Color::Red))
-                }
-                SelectedGlobal::Rel => {
-                    status_spans[2] = status_spans[2]
                         .clone()
                         .style(Style::default().fg(Color::Red))
                 }
@@ -186,6 +169,8 @@ impl Ui {
                 Span::from(format!(" Dir: {} ", draw_data.dirs[i].get_symbol())),
                 Span::from(format!(" Pitch: {} ", self.state.semitones[i])),
                 Span::from(format!(" Gain: {:.1} ", draw_data.gains[i])),
+                Span::from(format!(" Att: {:.1} ", draw_data.attacks[i])),
+                Span::from(format!(" Rel: {:.1} ", draw_data.releases[i])),
             ];
 
             if self.state.selected_area == SelectedArea::Sequence(i) {
@@ -207,6 +192,16 @@ impl Ui {
                     }
                     Selected::Gain => {
                         param_lines[3] = param_lines[3]
+                            .clone()
+                            .style(Style::default().fg(Color::Red))
+                    }
+                    Selected::Attack => {
+                        param_lines[4] = param_lines[4]
+                            .clone()
+                            .style(Style::default().fg(Color::Red))
+                    }
+                    Selected::Release => {
+                        param_lines[5] = param_lines[5]
                             .clone()
                             .style(Style::default().fg(Color::Red))
                     }
@@ -233,29 +228,25 @@ enum Selected {
     Dir,
     Pitch,
     Gain,
+    Attack,
+    Release,
 }
 
 #[derive(PartialEq)]
 enum SelectedGlobal {
     Bpm,
-    Att,
-    Rel,
 }
 
 impl SelectedGlobal {
     fn next(&mut self) {
         *self = match self {
-            SelectedGlobal::Bpm => SelectedGlobal::Att,
-            SelectedGlobal::Att => SelectedGlobal::Rel,
-            SelectedGlobal::Rel => SelectedGlobal::Att,
+            SelectedGlobal::Bpm => SelectedGlobal::Bpm,
         }
     }
 
     fn prev(&mut self) {
         *self = match self {
-            SelectedGlobal::Bpm => SelectedGlobal::Rel,
-            SelectedGlobal::Att => SelectedGlobal::Bpm,
-            SelectedGlobal::Rel => SelectedGlobal::Att,
+            SelectedGlobal::Bpm => SelectedGlobal::Bpm,
         }
     }
 }
@@ -300,16 +291,20 @@ impl Selected {
             Selected::Div => Selected::Dir,
             Selected::Dir => Selected::Pitch,
             Selected::Pitch => Selected::Gain,
-            Selected::Gain => Selected::Div,
+            Selected::Gain => Selected::Attack,
+            Selected::Attack => Selected::Release,
+            Selected::Release => Selected::Div,
         };
     }
 
     fn prev(&mut self) {
         *self = match self {
-            Selected::Div => Selected::Gain,
-            Selected::Gain => Selected::Dir,
+            Selected::Div => Selected::Release,
+            Selected::Release => Selected::Attack,
+            Selected::Attack => Selected::Gain,
+            Selected::Gain => Selected::Pitch,
+            Selected::Pitch => Selected::Dir,
             Selected::Dir => Selected::Div,
-            Selected::Pitch => Selected::Div,
         };
     }
 }
@@ -323,8 +318,6 @@ pub struct State {
     sender: Sender<SetEvent>,
     selected: Selected,
     semitones: Vec<i8>,
-    attack: f32,
-    release: f32,
 }
 
 impl State {
@@ -378,32 +371,42 @@ impl State {
                                     .sender
                                     .send(SetEvent::SetDir((idx, draw_data.dirs[idx].next())))
                                     .unwrap(),
-                                Selected::Gain => self
-                                    .sender
-                                    .send(SetEvent::SetGain((idx, draw_data.gains[idx] + 0.1)))
-                                    .unwrap(),
+                                Selected::Gain => {
+                                    let mut new_gain = draw_data.gains[idx] + 0.1;
+                                    if new_gain > 1.0 {
+                                        new_gain = 1.0
+                                    }
+
+                                    self.sender
+                                        .send(SetEvent::SetGain((idx, new_gain)))
+                                        .unwrap();
+                                }
+                                Selected::Attack => {
+                                    let mut new_att = draw_data.attacks[idx] + 0.1;
+                                    if new_att > 1.0 {
+                                        new_att = 1.0
+                                    }
+
+                                    self.sender
+                                        .send(SetEvent::SetAttack((idx, new_att)))
+                                        .unwrap();
+                                }
+                                Selected::Release => {
+                                    let mut new_rel = draw_data.releases[idx] + 0.1;
+                                    if new_rel > 1.0 {
+                                        new_rel = 1.0
+                                    }
+
+                                    self.sender
+                                        .send(SetEvent::SetRelease((idx, new_rel)))
+                                        .unwrap();
+                                }
                             },
                             SelectedArea::Global => match self.selected_global {
                                 SelectedGlobal::Bpm => self
                                     .sender
                                     .send(SetEvent::SetBmp(draw_data.bpm + 1.0))
                                     .unwrap(),
-                                SelectedGlobal::Att => {
-                                    let att = &mut self.attack;
-                                    *att += 0.01;
-                                    if *att >= 0.99 {
-                                        *att = 0.99;
-                                    }
-                                    self.sender.send(SetEvent::SetAttack(*att)).unwrap();
-                                }
-                                SelectedGlobal::Rel => {
-                                    let rel = &mut self.release;
-                                    *rel += 0.01;
-                                    if *rel >= 0.99 {
-                                        *rel = 0.99
-                                    }
-                                    self.sender.send(SetEvent::SetRelease(*rel)).unwrap();
-                                }
                             },
                         },
                         KeyCode::Char('J') => match self.selected_area {
@@ -429,32 +432,42 @@ impl State {
                                     .sender
                                     .send(SetEvent::SetDir((idx, draw_data.dirs[idx].prev())))
                                     .unwrap(),
-                                Selected::Gain => self
-                                    .sender
-                                    .send(SetEvent::SetGain((idx, draw_data.gains[idx] - 0.1)))
-                                    .unwrap(),
+                                Selected::Gain => {
+                                    let mut new_gain = draw_data.gains[idx] - 0.1;
+                                    if new_gain < 0.0 {
+                                        new_gain = 0.0
+                                    }
+
+                                    self.sender
+                                        .send(SetEvent::SetGain((idx, new_gain)))
+                                        .unwrap();
+                                }
+                                Selected::Attack => {
+                                    let mut new_att = draw_data.attacks[idx] - 0.1;
+                                    if new_att < 0.1 {
+                                        new_att = 0.1
+                                    }
+
+                                    self.sender
+                                        .send(SetEvent::SetAttack((idx, new_att)))
+                                        .unwrap();
+                                }
+                                Selected::Release => {
+                                    let mut new_rel = draw_data.releases[idx] - 0.1;
+                                    if new_rel < 0.1 {
+                                        new_rel = 0.1
+                                    }
+
+                                    self.sender
+                                        .send(SetEvent::SetRelease((idx, new_rel)))
+                                        .unwrap();
+                                }
                             },
                             SelectedArea::Global => match self.selected_global {
                                 SelectedGlobal::Bpm => self
                                     .sender
                                     .send(SetEvent::SetBmp(draw_data.bpm - 1.0))
                                     .unwrap(),
-                                SelectedGlobal::Att => {
-                                    let att = &mut self.attack;
-                                    *att -= 0.01;
-                                    if *att <= 0.02 {
-                                        *att = 0.02
-                                    }
-                                    self.sender.send(SetEvent::SetAttack(*att)).unwrap();
-                                }
-                                SelectedGlobal::Rel => {
-                                    let rel = &mut self.release;
-                                    *rel -= 0.01;
-                                    if *rel <= 0.02 {
-                                        *rel = 0.02
-                                    }
-                                    self.sender.send(SetEvent::SetRelease(*rel)).unwrap();
-                                }
                             },
                         },
                         KeyCode::Char('1') => match self.mode {

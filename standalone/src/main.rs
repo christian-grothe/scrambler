@@ -24,8 +24,8 @@ enum SetEvent {
     SetRangeStart((usize, u8)),
     SetRangeEnd((usize, u8)),
     SetDir((usize, PlayMode)),
-    SetAttack(f32),
-    SetRelease(f32),
+    SetAttack((usize, f32)),
+    SetRelease((usize, f32)),
     SetGain((usize, f32)),
 }
 
@@ -90,8 +90,8 @@ fn main() -> io::Result<()> {
                     SetEvent::SetDir((index, playmode)) => {
                         state.sequencer.set_play_mode(index, playmode)
                     }
-                    SetEvent::SetAttack(val) => state.sequencer.set_attack(val),
-                    SetEvent::SetRelease(val) => state.sequencer.set_release(val),
+                    SetEvent::SetAttack((index, val)) => state.sequencer.set_attack(val, index),
+                    SetEvent::SetRelease((index, val)) => state.sequencer.set_release(val, index),
                     SetEvent::SetGain((index, val)) => state.sequencer.set_gain(val, index),
                 }
             }
